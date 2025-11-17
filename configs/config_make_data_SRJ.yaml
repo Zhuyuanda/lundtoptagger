@@ -1,0 +1,31 @@
+# NOTE: it is assumed all data in a single file has the same DSID
+path_to_rootfiles: '/data/ravinascos/Lund_Plane_2024_graphs/TRAIN_DUMMY_02QCD_1Z/*.root'
+
+n_files: null
+
+#event_fractions: {0.0025: 2, 0.005: 1, 0.01: 2, 0.02: 1, 0.05: 19}
+#event_fraction_idx: null
+event_fractions:
+  0.7: 1
+  0.3: 1
+event_fraction_idx: null
+
+
+out_dir: "/share/lustre/yzhu/srjtest/{id}{frac}"
+out_file_name_graphs: "graphs_{id}{frac}_ln_kT_cut_{kT_cut}{include_pt}"
+out_file_name_root: "data_{id}{frac}_ln_kT_cut_{kT_cut}.root"
+
+id: "test"
+
+# -------------------------------------------------------------------
+# Use SRJ signal config
+# -------------------------------------------------------------------
+signal_config_file: "configs/config_signal_srj.yaml"
+signal: srj              # IMPORTANT: for SRJ dataset
+signal_name_in_weight: False   # SRJ 不使用 weight branches，也不 reweight flat-pt
+
+# -------------------------------------------------------------------
+# selection and output variables
+# -------------------------------------------------------------------
+kT_cut: null
+include_pt: True
