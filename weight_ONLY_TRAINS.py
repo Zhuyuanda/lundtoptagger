@@ -194,7 +194,7 @@ def main():
     if choose_model == "LundNet_plus_GN2X":
         model = LundNet_plus_GN2X()
     if choose_model == "LundNet_plus_GN3X":
-        model = LundNet_plus_GN2X()
+        model = LundNet_plus_GN3X()
 
     path_to_ckpt = config['retrain']['path_to_ckpt']
 

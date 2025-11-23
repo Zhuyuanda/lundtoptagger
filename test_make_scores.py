@@ -96,7 +96,7 @@ def main():
     if choose_model == "LundNet_plus_GN2X":
         model = LundNet_plus_GN2X()
     if choose_model == "LundNet_plus_GN3X":
-        model = LundNet_plus_GN2X()
+        model = LundNet_plus_GN3X()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # Usually gpu 4 worked best, it had the most memory available
     model.load_state_dict(torch.load(path_to_combined_ckpt, map_location=device))
