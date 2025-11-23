@@ -53,6 +53,12 @@ def main():
         print("Loading file", file_path)
         dataset += torch.load(file_path, weights_only=False) # weights_only=False added so that it works with PyTorch 2.6; it used to be the default
 
+    for d in dataset:
+        if hasattr(d, "fjet_weight_pt_W"):
+            del d.fjet_weight_pt_W
+        if hasattr(d, "fjet_weight_pt_top"):
+            del d.fjet_weight_pt_top
+
     # apply jet mass and pT cuts
     if config['cut_pt_mass']:
         config_signal = load_yaml(config['config_signal_path'])[config['signal']]
