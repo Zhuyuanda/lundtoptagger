@@ -183,6 +183,59 @@ class LundNet_plus_GN2X(torch.nn.Module):
         #print(x.shape)
         return F.sigmoid(x)
 
+class LundNet_plus_GN3X(torch.nn.Module):
+    def __init__(self):
+        super(LundNet_plus_GN3X, self).__init__()
+        self.conv1 = EdgeConv(nn.Sequential(nn.Linear(6, 32), nn.BatchNorm1d(32), nn.ReLU(),
+                                            nn.Linear(32, 32), nn.BatchNorm1d(32), nn.ReLU()), aggr='add')
+        self.conv2 = EdgeConv(nn.Sequential(nn.Linear(64, 32), nn.BatchNorm1d(32), nn.ReLU(),
+                                            nn.Linear(32, 32), nn.BatchNorm1d(32), nn.ReLU()), aggr='add')
+        self.conv3 = EdgeConv(nn.Sequential(nn.Linear(64, 64), nn.BatchNorm1d(64), nn.ReLU(),
+                                            nn.Linear(64, 64), nn.BatchNorm1d(64), nn.ReLU()), aggr='add')
+        self.conv4 = EdgeConv(nn.Sequential(nn.Linear(128, 64), nn.BatchNorm1d(64), nn.ReLU(),
+                                            nn.Linear(64, 64), nn.BatchNorm1d(64), nn.ReLU()), aggr='add')
+        self.conv5 = EdgeConv(nn.Sequential(nn.Linear(128, 128), nn.BatchNorm1d(128), nn.ReLU(),
+                                            nn.Linear(128, 128), nn.BatchNorm1d(128), nn.ReLU()), aggr='add')
+        self.conv6 = EdgeConv(nn.Sequential(nn.Linear(256, 128), nn.BatchNorm1d(128), nn.ReLU(),
+                                            nn.Linear(128, 128), nn.BatchNorm1d(128), nn.ReLU()), aggr='add')
+
+        self.seq1 = nn.Sequential(nn.Linear(448, 384),
+                                  nn.BatchNorm1d(384),
+                                  nn.ReLU())
+        
+        self.seq2 = nn.Sequential(nn.Linear(394, 256),  # 384 + 1 (Ntrk) + 9 GN3X
+                                  nn.ReLU())
+        self.lin = nn.Linear(256, 1)
+
+    def forward(self, data):
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+        Ntrk = torch.unsqueeze(data.Ntrk, 1)
+
+        # GN3X tagger outputs
+        g_keys = [
+            "GN3X_phtautauhad", "GN3X_phbb", "GN3X_phcc", "GN3X_ptop",
+            "GN3X_pqcdbb", "GN3X_pqcdbx", "GN3X_pqcdcx", "GN3X_pqcdll", "GN3X_pWqq"
+        ]
+        g_list = [torch.unsqueeze(getattr(data, k), 1) for k in g_keys]
+
+        # EdgeConv stack
+        x1 = self.conv1(x, edge_index)
+        x2 = self.conv2(x1, edge_index)
+        x3 = self.conv3(x2, edge_index)
+        x4 = self.conv4(x3, edge_index)
+        x5 = self.conv5(x4, edge_index)
+        x6 = self.conv6(x5, edge_index)
+
+        x = torch.cat((x1, x2, x3, x4, x5, x6), dim=1)  # 448
+        x = self.seq1(x)
+        x = global_mean_pool(x, batch)  # (batch_size, 384)
+
+        x = torch.cat([x, Ntrk] + g_list, dim=1)  # final dim: 384 + 1 + 9 = 394
+        x = self.seq2(x)
+        x = F.dropout(x, p=0.1, training=self.training)
+        x = self.lin(x)
+        return torch.sigmoid(x)
+
 class LundNet_old(torch.nn.Module):
     def __init__(self):
         super(LundNet_old, self).__init__()
