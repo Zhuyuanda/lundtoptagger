@@ -38,9 +38,25 @@ def main():
     signal = config["signal"]
     signals = [s for s in config_signal.keys() if s != "bkg_histos"] if signal == "all" else [signal]
 
-    # ROOT files
-    path_to_files = config["path_to_rootfiles"]
-    files = glob.glob(path_to_files)[:config["n_files"]]
+    raw_paths = config["path_to_rootfiles"]
+
+    # allow both single string and list of strings
+    if isinstance(raw_paths, str):
+        path_list = [raw_paths]
+    elif isinstance(raw_paths, list):
+        path_list = raw_paths
+    else:
+        raise ValueError("path_to_rootfiles must be string or list of strings")
+
+    files = []
+    for pat in path_list:
+        expanded = glob.glob(pat)
+        files.extend(expanded)
+
+    # truncate if n_files is set
+    if config["n_files"] is not None:
+        files = files[:config["n_files"]]
+
 
     intreename = "AnalysisTree"
     n_files = len(files)
@@ -99,6 +115,28 @@ def main():
 
         dataset = []
         primary_Lund_only_one_arr = []
+
+        # ---------------------------------------------------------
+        # Slice-level Welford accumulators (node features + Ntrk)
+        # ---------------------------------------------------------
+        feat_dim = 3  # (d, z, kt)
+        slice_count = 0
+        slice_mean = np.zeros(feat_dim, dtype=np.float64)
+        slice_M2 = np.zeros(feat_dim, dtype=np.float64)
+
+        slice_count_ntrk = 0
+        slice_mean_ntrk = 0.0
+        slice_M2_ntrk = 0.0
+
+
+        # Welford update function
+        def welford_update(mean, M2, count, x):
+            count += 1
+            delta = x - mean
+            mean += delta / count
+            delta2 = x - mean
+            M2 += delta * delta2
+            return mean, M2, count
 
         out_tree_dict = {
             branch_name: ak.Array([]) for branch_name in
@@ -186,6 +224,38 @@ def main():
                 print("\nCreating PyTorch graphs:")
                 passed_selection = []
 
+
+                # ---------------------------------------------------------
+                # Accumulate slice statistics (before graph-level selection)
+                # ---------------------------------------------------------
+
+                # Extract raw arrays (flattened)
+                raw_z  = ak.to_numpy(ak.flatten(jet_properties["jetLundZ"])) + 1e-4
+                raw_kt = ak.to_numpy(ak.flatten(jet_properties["jetLundKt"])) + 1e-4
+                raw_dr = ak.to_numpy(ak.flatten(jet_properties["jetLundDeltaR"])) + 1e-4
+                raw_ntrk = ak.to_numpy(jet_properties["SRJ_Nconst_Charged"]).astype(float)
+
+                # Same log transform as srj_create, but no normalization
+                raw_z = np.log(1.0 / raw_z)
+                raw_kt = np.log(raw_kt)
+                raw_dr = np.log(1.0 / raw_dr)
+
+                # Node-level feature matrix
+                raw_nodes = np.vstack([raw_dr, raw_z, raw_kt]).T  # (N_nodes, 3)
+
+                # Update Welford for (d,z,kt)
+                for v in raw_nodes:
+                    slice_mean, slice_M2, slice_count = welford_update(
+                        slice_mean, slice_M2, slice_count, v
+                    )
+
+                # Update Welford for Ntrk
+                for vv in raw_ntrk:
+                    slice_mean_ntrk, slice_M2_ntrk, slice_count_ntrk = welford_update(
+                        slice_mean_ntrk, slice_M2_ntrk, slice_count_ntrk, vv
+                    )
+
+
                 dataset = srj_create_train_dataset_fulld_new_Ntrk_pt_file(
                     dataset,
                     jet_properties["jetLundZ"],
@@ -270,6 +340,32 @@ def main():
             outfile["FlatSubstructureJetTree"] = out_tree_dict
 
         print("ROOT written:", output_path_root)
+
+        # ---------------------------------------------------------
+        # Save mean/std for this slice
+        # ---------------------------------------------------------
+        slice_var = slice_M2 / max(slice_count - 1, 1)
+        slice_std = np.sqrt(slice_var)
+
+        slice_var_ntrk = slice_M2_ntrk / max(slice_count_ntrk - 1, 1)
+        slice_std_ntrk = np.sqrt(slice_var_ntrk)
+
+        stats = {
+            "mean_x": slice_mean.tolist(),     # [mean_d, mean_z, mean_kt]
+            "std_x": slice_std.tolist(),       # [std_d, std_z, std_kt]
+            "mean_ntrk": float(slice_mean_ntrk),
+            "std_ntrk": float(slice_std_ntrk),
+            "nodes": int(slice_count),
+            "jets": int(slice_count_ntrk)
+        }
+
+        json_path = os.path.join(out_dir, f"slice_meanstd_part{frac_idx}.json")
+        import json
+        with open(json_path, "w") as f:
+            json.dump(stats, f, indent=2)
+
+        print(f"Saved slice mean/std to: {json_path}")
+
 
 
 if __name__ == "__main__":

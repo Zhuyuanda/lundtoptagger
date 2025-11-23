@@ -1057,18 +1057,7 @@ def srj_create_train_dataset_fulld_new_Ntrk_pt_file(
         k_out = k_out[k_mask]
         d_out = d_out[k_mask]
         
-        
-        mean_z, std_z = 2.0568479032747313, 1.4450598054504056
-        mean_dr, std_dr = 3.8597358364389427, 2.2748462855901073
-        mean_kt, std_kt = -2.379904791478249, 2.940813577366582
-        #mean_ntrks, std_ntrks = 26.556999184747827, 16.53733685428723 #only qcd good partition
-        #mean_ntrks, std_ntrks = 39.81133623360089, 10.99193693271175
-        mean_ntrks, std_ntrks = 57.588158609500134, 23.900100132781983
-        
-        z_out = (z_out - mean_z) / std_z
-        k_out = (k_out - mean_kt) / std_kt
-        d_out = (d_out - mean_dr) / std_dr
-        Ntrk = (Ntracks[i] - mean_ntrks) / std_ntrks
+        Ntrk = Ntracks[i]
 
         #print("3", z_out)
         #print("3.5", z_out[1])
@@ -1150,6 +1139,7 @@ def srj_create_train_dataset_fulld_new_Ntrk_pt_file(
             mass =  float(jet_ms[i]), #torch.tensor(jet_ms[i], dtype=torch.float).detach(),
             y = float(label_out), #torch.tensor(label_out, dtype=torch.float).detach() ))
         )
+        graph["eta"] = float(jet_etas[i])
         if include_pt:
             graph["pt"] = float(jet_pts[i]) #torch.tensor(jet_pts[i] , dtype=torch.float).detach()
 

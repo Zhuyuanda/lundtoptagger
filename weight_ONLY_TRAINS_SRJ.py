@@ -2,6 +2,7 @@ import argparse
 import csv
 from datetime import datetime
 import os
+import json
 
 import numpy as np
 import torch
@@ -53,15 +54,59 @@ def main():
         print("Loading file", file_path)
         dataset += torch.load(file_path, weights_only=False) # weights_only=False added so that it works with PyTorch 2.6; it used to be the default
 
-    # apply jet mass and pT cuts
-    if config['cut_pt_mass']:
+    # -------------------------------------------------------
+    # Load normalization stats from JSON (slice mean/std)
+    # -------------------------------------------------------
+    json_path = config['data']['meanstd_json']
+    print(f"\nLoading normalization stats from: {json_path}")
+
+    with open(json_path, 'r') as f:
+        stats = json.load(f)
+
+    mean_x = np.array(stats["mean_x"], dtype=np.float32)     # [mean_dr, mean_z, mean_kt]
+    std_x  = np.array(stats["std_x"], dtype=np.float32)
+    mean_ntrk = float(stats["mean_ntrk"])
+    std_ntrk  = float(stats["std_ntrk"])
+
+    # apply jet mass, pT, eta cuts
+    if config['cut_pt_eta_mass']:
         config_signal = load_yaml(config['config_signal_path'])[config['signal']]
-        pt_range = config_signal['pt_range']
+        
+        pt_range   = config_signal['pt_range']
         mass_range = config_signal['mass_range']
-        print("Filtering jets with pT in range", pt_range, "and mass in range", mass_range)
-        dataset = [jet_graph for jet_graph in dataset
-                   if  pt_range[0]   < jet_graph.pt   < pt_range[1]
-                   and mass_range[0] < jet_graph.mass < mass_range[1]]
+        eta_min    = config_signal.get('eta_min', 0.0)
+        eta_max    = config_signal.get('eta_max', 2.0)  # default if missing
+
+        print("Filtering jets with:")
+        print(f"  pT   in {pt_range}")
+        print(f"  mass in {mass_range}")
+        print(f"  |eta| between {eta_min} and {eta_max}")
+
+        dataset = [
+            jet_graph for jet_graph in dataset
+            if  (pt_range[0]   < jet_graph.pt   < pt_range[1]) and
+                (mass_range[0] < jet_graph.mass < mass_range[1]) and
+                (eta_min <= abs(jet_graph.eta) <= eta_max)
+        ]
+
+        
+    # -------------------------------------------------------
+    # Standardization using slice-level JSON stats
+    # (after pT + mass cuts to reduce computation)
+    # -------------------------------------------------------
+    print("Applying standardization to dataset...")
+
+    for g in dataset:
+        # normalize node features x: shape (N_nodes, 3)
+        x = g.x.numpy()                       # convert to numpy
+        x = (x - mean_x) / std_x              # standardize
+        g.x = torch.tensor(x, dtype=torch.float)
+
+        # normalize Ntrk
+        g.Ntrk = torch.tensor(
+            (g.Ntrk - mean_ntrk) / std_ntrk,
+            dtype=torch.float
+        )
 
     # check the number of signal and background jets
     labels = np.array([jet_graph.y for jet_graph in dataset])
@@ -71,73 +116,132 @@ def main():
     print("Signal count:", num_signal)
     print("Background count:", num_background)
 
-    # optionally flatten the mass and pt distributions and save plots of the distributions
-    etas = np.array([jet_graph.eta for jet_graph in dataset])   
+    # ===============================================
+    #  SRJ flattening: support (pT) or (pT, η)
+    # ===============================================
+    
+    etas = np.array([jet_graph.eta for jet_graph in dataset])
     pts  = np.array([jet_graph.pt  for jet_graph in dataset])
 
-
-    # -------- SRJ 2D (pT, η) flattening --------
     flatten_eta = config.get('flatten_eta', True)
     flatten_pt  = config.get('flatten_pt', True)
 
-    if flatten_eta and flatten_pt:
-        print("Applying 2D KDE flattening in (pT, η) for SRJ signal and background...")
+    # -------------------------------
+    # Case 1: (pT, η) 2D flattening
+    # -------------------------------
+    if flatten_pt and flatten_eta:
+        print("Applying 2D KDE flattening in (pT, η)…")
 
-        # --- signal flatten ---
         weights_sig = assign_2d_flat_weights_kde(
-            mass = etas[labels == 1],     # mass → eta
-            pt   = pts [labels == 1]
+            mass = etas[labels == 1],   # SRJ: "mass" → use eta
+            pt   = pts [labels == 1],
         )
 
-        # --- background flatten ---
         weights_bkg = assign_2d_flat_weights_kde(
             mass = etas[labels == 0],
-            pt   = pts [labels == 0]
+            pt   = pts [labels == 0],
         )
 
-    else:
-        raise RuntimeError("SRJ MUST use 2D flattening in (pT, η). Set flatten_eta=True and flatten_pt=True.")
+    # -------------------------------
+    # Case 2: pT-only 1D flattening
+    # -------------------------------
+    elif flatten_pt and (not flatten_eta):
+        print("Applying 1D flattening only on pT...")
+        weights_sig = assign_flat_weights(
+            pts[labels == 1],
+            n_bins = config.get("n_bins_pt", 40)
+        )
+        weights_bkg = assign_flat_weights(
+            pts[labels == 0],
+            n_bins = config.get("n_bins_pt", 40)
+        )
 
+    # -------------------------------
+    # Case 3: η-only flattening → forbidden
+    # -------------------------------
+    elif flatten_eta and not flatten_pt:
+        raise RuntimeError("η-only flattening is not supported. Set flatten_pt=True.")
+
+    # -------------------------------
+    # Case 4: No flattening → forbidden
+    # -------------------------------
+    else:
+        raise RuntimeError("SRJ MUST use flatten_pt=True. Set flatten_pt=True in config.")
+
+    # ===============================================
+    #  Visualisation: pT / η + 2D distribution plots
+    # ===============================================
 
     path_to_save = config['data']['path_to_save'].format(ln_kT_cut=ln_kT_cut)
     os.makedirs(path_to_save, exist_ok=True)
     print("\nResults will be saved to", path_to_save)
 
-    for var_array, var_name, var_bins in zip([masses, pts], ['Mass', 'pT'], ['n_bins_mass', 'n_bins_pt']):
-        hist_args = dict(
-            bins = config[var_bins],
-            density = True,
-            fmt = "."
-        )
-        hist_with_errors(var_array[labels==0], label='Background', weights=weights_bkg, **hist_args, capsize=2)
-        hist_with_errors(var_array[labels==1], label='Signal',     weights=weights_sig, **hist_args)
-        plt.xlabel(f"LRJ {var_name} [GeV]")
-        plt.ylabel('density')
-        if var_name=="Mass" and not flatten_mass or var_name=="pT" and not flatten_pt:
-            plt.ylim(bottom=0)
-        plt.legend()
-        plt.savefig(os.path.join(path_to_save, f"{var_name}_distribution.png"))
-        plt.close()
-    
-    for truth_label, label_name, weights_array in zip([0, 1], ['background', 'signal'], [weights_bkg, weights_sig]):
-        hist_arrays = [masses[labels==truth_label], pts[labels==truth_label]]
-        hist_args = dict(
-            bins=(config['n_bins_mass'], config['n_bins_pt']),
-            weights=weights_array,
-            density=True
-        )
-        bin_counts_2d_hist = np.histogram2d(*hist_arrays, **hist_args)[0]
-        min_bin_count = bin_counts_2d_hist[bin_counts_2d_hist > 0].min()
-        print(f"Minimum bin count for {label_name}:", min_bin_count)
+    # -------------------------------
+    # Plot pT and η distributions
+    # -------------------------------
 
-        plt.hist2d(*hist_arrays, **hist_args, cmin=min_bin_count)
+    # 1. pT distribution
+    hist_with_errors(
+        pts[labels == 0], label='Background', weights=weights_bkg,
+        bins=config['n_bins_pt'], density=True, fmt=".", capsize=2
+    )
+    hist_with_errors(
+        pts[labels == 1], label='Signal', weights=weights_sig,
+        bins=config['n_bins_pt'], density=True, fmt="."
+    )
+    plt.xlabel("LRJ pT [GeV]")
+    plt.ylabel("density")
+    plt.legend()
+    plt.savefig(os.path.join(path_to_save, "pT_distribution.png"))
+    plt.close()
+
+    # 2. η distribution
+    hist_with_errors(
+        etas[labels == 0], label='Background', weights=weights_bkg,
+        bins=config['n_bins_eta'], density=True, fmt=".", capsize=2
+    )
+    hist_with_errors(
+        etas[labels == 1], label='Signal', weights=weights_sig,
+        bins=config['n_bins_eta'], density=True, fmt="."
+    )
+    plt.xlabel("LRJ η")
+    plt.ylabel("density")
+    plt.legend()
+    plt.savefig(os.path.join(path_to_save, "eta_distribution.png"))
+    plt.close()
+
+    # -------------------------------
+    # Plot 2D distributions (pT, η)
+    # -------------------------------
+    for truth_label, name, w in zip([0, 1], ['background', 'signal'], [weights_bkg, weights_sig]):
+        
+        H, xedges, yedges = np.histogram2d(
+            pts[labels == truth_label],
+            etas[labels == truth_label],
+            bins=(config['n_bins_pt'], config['n_bins_eta']),
+            weights=w, density=True
+        )
+
+        # ignore zero bins
+        positive_bins = H[H > 0]
+        min_bin_count = positive_bins.min() if len(positive_bins) else 0
+
+        print(f"Minimum bin content for {name}: {min_bin_count}")
+
+        plt.hist2d(
+            pts[labels == truth_label],
+            etas[labels == truth_label],
+            bins=(config['n_bins_pt'], config['n_bins_eta']),
+            weights=w,
+            density=True,
+            cmin=min_bin_count
+        )
         plt.colorbar(label='density')
-        plt.xlabel('LRJ Mass [GeV]')
-        plt.ylabel('LRJ pT [GeV]')
-        plt.savefig(os.path.join(path_to_save, f"Mass_pT_distribution_{label_name}.png"))
+        plt.xlabel("LRJ pT [GeV]")
+        plt.ylabel("LRJ η")
+        plt.savefig(os.path.join(path_to_save, f"pT_eta_distribution_{name}.png"))
         plt.close()
 
-    print("Mass and pT plots saved")
 
     # rescale the weights so that the total weight of signal jets is equal to the total weight of background jets
     weights_signal_total = weights_sig.sum()
