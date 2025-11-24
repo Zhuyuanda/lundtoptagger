@@ -17,7 +17,7 @@ event_fraction_idx: null
 # event_fraction_idx: null
 
 
-out_dir: "/share/lustre/yzhu/dijet_data/data_{id}{frac}"
+out_dir: "/share/lustre/yzhu/dijet_slice/data_{id}{frac}"
 out_file_name_graphs: "graphs_{id}{frac}_ln_kT_cut_{kT_cut}{include_pt}"
 out_file_name_root: "data_{id}{frac}_ln_kT_cut_{kT_cut}.root"
 

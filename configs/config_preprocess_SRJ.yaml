@@ -1,0 +1,38 @@
+# ============================================================
+# Preprocess Config for SRJ (Standardize + Flatten)
+# ============================================================
+
+data:
+  train_graphs:
+    - "/share/lustre/yzhu/dijet_data/data_dijet_part0_0.25percent/graphs_dijet_part0_0.25percent_ln_kT_cut_None_with_pt"
+
+  test_graphs:
+    - "/share/lustre/yzhu/dijet_data/data_dijet_part1_0.25percent/graphs_dijet_part1_0.25percent_ln_kT_cut_None_with_pt"
+
+  out_dir: "/home/yuanda/srj/lundtoptagger/preprocess_log"
+
+  # mean/std JSON
+  meanstd_json: "/share/lustre/yzhu/dijet_data/data_dijet_part0_0.25percent/slice_meanstd_part0.json"
+
+
+# ============================================================
+# Jet selection
+# ============================================================
+cut_pt_eta_mass: True
+config_signal_path: "./configs/config_signal_SRJ.yaml"
+signal: srj
+
+
+# ============================================================
+# Flattening options (train only)
+# ============================================================
+flatten_pt: True
+flatten_eta: True
+n_bins_pt: 100
+n_bins_eta: 50
+
+
+# ============================================================
+# Compute resources
+# ============================================================
+num_workers: 4

@@ -3,33 +3,13 @@
 # ============================================================
 data:
   path_to_trainfiles: "/share/lustre/yzhu/dijet_data/data_dijet_part0_0.25percent/graphs_dijet_part0_0.25percent_ln_kT_cut_None_with_pt"
-  path_to_save: "/share/lustre/yzhu/dijet_model/"
+  path_to_save: "/share/lustre/yzhu/srjtest"
   model_name: "LundNet_dijet_ln_kT_cut_{ln_kT_cut}"
   adv_model_name: "adversarial"
   ln_kT_cut: null
 
-  # NEW: mean/std JSON from makedata slice
+  # Used only for reading JSON (harmless to keep)
   meanstd_json: "/share/lustre/yzhu/dijet_data/data_dijet_part0_0.25percent/slice_meanstd_part0.json"
-
-
-# ============================================================
-# Preprocessing
-# ============================================================
-cut_pt_eta_mass: True
-config_signal_path: "./configs/config_signal_SRJ.yaml"
-signal: srj
-
-# --- flattening ---
-flatten_pt: True        # MUST be True for SRJ
-flatten_eta: True       # if True → 2D flattening in (pT, η)
-                        # if False → 1D flatten on pT only
-
-# flatten_mass removed 
-num_iters: 4
-
-# histogram bins
-n_bins_pt: 100
-n_bins_eta: 50        # NEW: for η histograms
 
 
 # ============================================================
@@ -44,11 +24,10 @@ architecture:
   n_epochs: 35
   choose_model: LundNet
 
-  # adversarial part
+  # adversarial settings
+  do_combined_training: False
   num_gaussians: 20
   n_epochs_adv: 20
-
-  do_combined_training: False
   lambda_parameter: 25
   loss_parameter: 1
   loss_weights: [1, 1]

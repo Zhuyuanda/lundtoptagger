@@ -6,7 +6,7 @@
 #SBATCH -p RCIF
 #SBATCH -N1
 #SBATCH -n4
-#SBATCH --mem=35G
+#SBATCH --mem=256G
 
 # Your config has 25 event_fraction slices
 #SBATCH --array=0-24
