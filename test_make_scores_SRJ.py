@@ -33,200 +33,131 @@ def build_model_by_name(name):
     else:
         raise ValueError(f"Unknown model type {name}")
 
-
 def main():
-    parser = argparse.ArgumentParser(description='Train with configurations')
+    parser = argparse.ArgumentParser(description='Run SRJ scoring')
     add_arg = parser.add_argument
     add_arg('config', help="job configuration")
-    parser.add_argument('--override', nargs='*', default=[], help='Overrides of the values in the config file in the form key.subkey=value')
+    parser.add_argument('--override', nargs='*', default=[])
     args = parser.parse_args()
-    config_file = args.config
-    config = load_yaml(config_file)
 
-    # Override configuration with command line arguments
+    config = load_yaml(args.config)
     override_dict = parse_dot_args(args.override)
     config = recursive_update(config, override_dict)
 
     kT_selection = config['data']['kT_cut']
-    filepath_placeholder_vals = dict(
-        sample = config['data']['sample'],
-        kT_cut = kT_selection
+    placeholder = dict(
+        sample=config['data']['sample'],
+        kT_cut=kT_selection
     )
 
-    paths_to_test_file_root = config['data']['paths_to_test_file_root']
-    if isinstance(paths_to_test_file_root, str):
-        # paths_to_test_file_root can be a list of file paths or a single path
-        # if it is a single path, convert it to a list
-        paths_to_test_file_root = [paths_to_test_file_root]
+    # Resolve input ROOT files
+    paths_root = config['data']['paths_to_test_file_root']
+    if isinstance(paths_root, str):
+        paths_root = [paths_root]
     files_root = []
-    for file_path in paths_to_test_file_root:
-        file_path = file_path.format(**filepath_placeholder_vals)
-        files_root.extend(glob.glob(file_path))
+    for p in paths_root:
+        files_root.extend(glob.glob(p.format(**placeholder)))
     files_root.sort()
-    print ("paths_to_test_file_root:", paths_to_test_file_root)
-    print ("files:", files_root)
+    print("ROOT input files:", files_root)
 
-    paths_to_test_file_graphs = config['data']['paths_to_test_file_graphs']
-    if isinstance(paths_to_test_file_graphs, str):
-        # paths_to_test_file_graphs can be a list of file paths or a single path
-        # if it is a single path, convert it to a list
-        paths_to_test_file_graphs = [paths_to_test_file_graphs]
+    # Resolve graph files
+    paths_graphs = config['data']['paths_to_test_file_graphs']
+    if isinstance(paths_graphs, str):
+        paths_graphs = [paths_graphs]
     files_graphs = []
-    for file_path in paths_to_test_file_graphs:
-        file_path = file_path.format(**filepath_placeholder_vals)
-        files_graphs.extend(glob.glob(file_path))
+    for p in paths_graphs:
+        files_graphs.extend(glob.glob(p.format(**placeholder)))
     files_graphs.sort()
-    print ("paths_to_test_file_graphs:", paths_to_test_file_graphs)
-    print ("files:", files_graphs)
+    print("Graph input files:", files_graphs)
 
-    path_to_outdir = config['data']['path_to_outdir'].format(**filepath_placeholder_vals)
-    os.makedirs(path_to_outdir, exist_ok=True)
-    print("The output files will be saved to")
-    print(path_to_outdir)
+    # Output
+    outdir = config['data']['path_to_outdir'].format(**placeholder)
+    os.makedirs(outdir, exist_ok=True)
+    print("Saving output to:", outdir)
 
-    path_to_combined_ckpt = config['test']['path_to_combined_ckpt'][kT_selection]
-    print("ckpt used:", path_to_combined_ckpt )
+    output_suffix = config['data']['output_suffix'].format(**placeholder)
 
-    output_suffix = config['data']['output_suffix'].format(**filepath_placeholder_vals)
-
-    intreename = "FlatSubstructureJetTree"
-    files_and_trees = {file_name: intreename for file_name in files_root}
+    # Count entries
+    tree_name = "FlatSubstructureJetTree"
+    files_and_trees = {fn: tree_name for fn in files_root}
     nentries_total = sum(entry[-1] for entry in uproot.num_entries(files_and_trees))
     nentries_done = 0
 
     batch_size = config['test']['batch_size']
-    choose_model = config['test']['choose_model']
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print("\nUsing device:", device)
 
-    t_filestart = time.time()
+    t_global = time.time()
 
-    # Set up model
-    # TODO: test multiple models, so there is no need to re-load the data for each model
-    if choose_model == "LundNet":
-        model = LundNet()
-        # model = LundNet_old()
-    if choose_model == "GATNet":
-        model = GATNet()
-    if choose_model == "GINNet":
-        model = GINNet()
-    if choose_model == "EdgeGinNet":
-        model = EdgeGinNet()
-    if choose_model == "PNANet":
-        model = PNANet()
-    if choose_model == "LundNet_plus_GN2X":
-        model = LundNet_plus_GN2X()
-    if choose_model == "LundNet_plus_GN3X":
-        model = LundNet_plus_GN3X()
+    # Main evaluation loop
+    for file_number, (fg, fr) in enumerate(zip(files_graphs, files_root), start=1):
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # Usually gpu 4 worked best, it had the most memory available
-    model.load_state_dict(torch.load(path_to_combined_ckpt, map_location=device))
-    print(f'\nUsing device: {device}')
-    model.to(device)
-
-    # Evaluation
-    for file_number, (file_graphs, file_root) in enumerate(zip(files_graphs,files_root), start=1):
         t_start = time.time()
+        print(f"\nLoading graph file {file_number}/{len(files_graphs)}:", fg)
 
-        # Load the data
-        print(f"\nLoading file: {file_number}/{len(files_graphs)}\n", file_graphs)
-
-        dataset = torch.load(file_graphs, weights_only=False)
-
+        dataset = torch.load(fg, weights_only=False)
         n_jets = len(dataset)
         print("Dataset size:", n_jets)
-        delta_t_fileax = time.time() - t_start
-        minutes, seconds = divmod(round(delta_t_fileax), 60)
-        print(f"Time taken to load: {minutes:d} min {seconds:d} s")
 
         test_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        del dataset
+        torch.cuda.empty_cache()
 
-        # Predict scores
-        print("\nCalculating scores...")
-        y_pred = get_scores(test_loader, model, device)
-        tagger_scores = np.array(y_pred[:,0])
+        multi_scores = {}
 
-        # ---------------------------------------------------------
-        # NEW: predict with multiple models from config
-        # ---------------------------------------------------------
-        if "models_to_run" in config["test"]:
-            multi_scores = {}
-            for m in config["test"]["models_to_run"]:
-                tag = m["tag"]
-                arch = m["arch"]
-                ckpt = m["ckpt"]
+        # ---------------------------
+        # Run all models in config
+        # ---------------------------
+        for m in config["test"]["models_to_run"]:
+            tag = m["tag"]
+            arch = m["arch"]
+            ckpt = m["ckpt"]
 
-                print(f"\n=== Running model {tag} ({arch}) ===")
+            print(f"\n=== Running model {tag} ({arch}) ===")
+            model = build_model_by_name(arch)
+            model.load_state_dict(torch.load(ckpt, map_location=device))
+            model.to(device)
+            model.eval()
 
-                model_multi = build_model_by_name(arch)
-                model_multi.load_state_dict(torch.load(ckpt, map_location=device))
-                model_multi.to(device)
-                model_multi.eval()
+            y_pred = get_scores(test_loader, model, device)
+            multi_scores[tag] = np.array(y_pred[:, 0])
 
-                y_pred_m = get_scores(test_loader, model_multi, device)
-                multi_scores[tag] = np.array(y_pred_m[:,0])
-
-            tagger_scores_multi = multi_scores
-        else:
-            tagger_scores_multi = None
-
-
-        delta_t_pred = time.time() - t_start - delta_t_fileax
-        minutes, seconds = divmod(round(delta_t_pred), 60)
-        print(f"Time taken to calculate predictions: {minutes:d} min {seconds:d} s")
-
-        # Free up memory
-        del dataset, test_loader, y_pred
-        if torch.cuda.is_available():
+            del model, y_pred
             torch.cuda.empty_cache()
 
-        # Get the tree from the existing ROOT file,
-        # either the file created by the Make_data.py script or from the scores file if it already exists
-        print("Getting the tree from the existing ROOT file...")
-        filename_no_ext = os.path.splitext(os.path.basename(file_root))[0]  # get the input file name without the .root extension
-        outfile_path = os.path.join(path_to_outdir, filename_no_ext) + output_suffix + ".root"
-        outfile_path = outfile_path.format(**filepath_placeholder_vals)
+        # Load original ROOT tree
+        print("\nLoading ROOT tree...")
+        filename = os.path.splitext(os.path.basename(fr))[0]
+        outfile = os.path.join(outdir, filename) + output_suffix + ".root"
+        outfile = outfile.format(**placeholder)
 
-        infile = outfile_path if os.path.exists(outfile_path) else file_root
+        infile = outfile if os.path.exists(outfile) else fr
         with uproot.open(infile) as f:
-            arrays = f[intreename].arrays()
+            arrays = f[tree_name].arrays()
 
-        # Add a new branch for the scores or overwrite the existing one
-        arrays[config["test"]["scores_branch_name"].format(tag=choose_model)] = tagger_scores
+        # Add all branches from all models
+        for tag, scores in multi_scores.items():
+            branch_name = config["test"]["scores_branch_name"].format(tag=tag)
+            arrays[branch_name] = scores
 
-        # ---------------------------------------------------------
-        # NEW: write additional model branches
-        # ---------------------------------------------------------
-        if tagger_scores_multi is not None:
-            for tag, scores in tagger_scores_multi.items():
-                branch = config["test"]["scores_branch_name"].format(tag=tag)
-                arrays[branch] = scores
+        # Save to ROOT
+        print("Saving scores to:", outfile)
+        with uproot.recreate(outfile) as f:
+            f[tree_name] = arrays
 
-        # Save the new scores to file
-        # TODO: maybe this could be done more efficiently with PyROOT, without reading the whole tree and writing it again
-        print("\nSaving scores to ROOT file...")
-        with uproot.recreate(outfile_path) as f:
-            f["FlatSubstructureJetTree"] = arrays
-        print("Scores saved to:", outfile_path)
-
-        # Free up memory
-        del arrays, tagger_scores
+        del arrays
         gc.collect()
 
-        # Time statistics
-        delta_t_save = time.time() - t_start - delta_t_fileax - delta_t_pred
-        minutes, seconds = divmod(round(delta_t_save), 60)
-        print(f"Time taken to save: {minutes:d} min {seconds:d} s")
-
+        # Progress logging
         nentries_done += n_jets
-        time_per_entry = (time.time() - t_start)/(nentries_done)
+        time_per_entry = (time.time() - t_start) / n_jets
         eta = time_per_entry * (nentries_total - nentries_done)
-        minutes, seconds = divmod(round(eta), 60)
-        print(f"\nEvaluated on {nentries_done} out of {nentries_total} jets")
-        print(f"Estimated time until completion: {minutes:d} min {seconds:d} s")
+        m, s = divmod(int(eta), 60)
+        print(f"Progress: {nentries_done}/{nentries_total}, ETA {m}m {s}s")
 
-    delta_t_total = time.time()-t_filestart
-    minutes, seconds = divmod(round(delta_t_total), 60)
-    print(f"\nTotal evaluation time: {minutes:d} min {seconds:d} s")
-
+    t_total = time.time() - t_global
+    m, s = divmod(int(t_total), 60)
+    print(f"\nTotal evaluation time: {m} min {s} s")
 
 if __name__ == "__main__":
     main()
