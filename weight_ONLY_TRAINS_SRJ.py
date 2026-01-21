@@ -3,6 +3,7 @@ import csv
 from datetime import datetime
 import os
 import json
+import glob
 
 import numpy as np
 import torch
@@ -18,10 +19,8 @@ from plotting.utils_plots_matplotlib import hist_with_errors
 
 print("Libraries loaded!")
 
-
 def main():
-
-    parser = argparse.ArgumentParser(description='Train with configurations')
+    parser = argparse.ArgumentParser(description='Train with configurations (Sharded Data Support)')
     add_arg = parser.add_argument
     add_arg('config', help="job configuration")
     add_arg('--ln_kT_cut', type=float, help="minimum value of kT kept for the training graphs")
@@ -37,6 +36,7 @@ def main():
     config = load_yaml(config_file)
     path_to_save = config['data']['path_to_save']
     os.makedirs(path_to_save, exist_ok=True)
+    
     ln_kT_cut = args.ln_kT_cut if args.ln_kT_cut is not None else config['data']['ln_kT_cut']
     do_combined_training = (
         True if args.do_combined_training in ["true", "yes", "1"] else
@@ -44,125 +44,154 @@ def main():
         config['architecture']['do_combined_training']
     )
     
-    # load the dataset
-    path_to_file = config['data']['path_to_trainfiles']
+    # ---------------------------------------------------------
+    # 1. Load dataset (supports wildcard matching of multiple batches)
+    # ---------------------------------------------------------
+    path_to_file_raw = config['data']['path_to_trainfiles']
+    if isinstance(path_to_file_raw, str):
+        path_to_file_list = [path_to_file_raw]
+    else:
+        path_to_file_list = path_to_file_raw
+
     dataset = []
-    if isinstance(path_to_file, str):
-        # path_to_file can be a list of file paths or a single path
-        # if it is a single path, convert it to a list
-        path_to_file = [path_to_file]
-    for file_path in path_to_file:
-        file_path = file_path.format(ln_kT_cut=ln_kT_cut)
-        print("Loading file", file_path)
-        dataset += torch.load(file_path, weights_only=False) # weights_only=False added so that it works with PyTorch 2.6; it used to be the default
+    all_shards = []
 
-    # rescale the weights so that the total weight of signal jets is equal to the total weight of background jets
+    # Parse all possible wildcard paths
+    for pattern in path_to_file_list:
+        formatted_pattern = pattern.format(ln_kT_cut=ln_kT_cut)
+        found_files = glob.glob(formatted_pattern)
+        if not found_files:
+            if os.path.exists(formatted_pattern):
+                all_shards.append(formatted_pattern)
+            else:
+                print(f"Warning: No files found for {formatted_pattern}")
+        else:
+            all_shards.extend(found_files)
 
+    all_shards = sorted(list(set(all_shards)))
+    print(f"Found {len(all_shards)} data shards to load.")
+
+    # Loop to load and merge shards
+    for file_path in all_shards:
+        print(f"Loading shard: {os.path.basename(file_path)}")
+        dataset += torch.load(file_path, weights_only=False)
+    
+    print(f"Total dataset size loaded: {len(dataset)}")
+
+    # ---------------------------------------------------------
+    # 2. Global weight re-balancing (Rescale weights)
+    # ---------------------------------------------------------
     dataset_sig = [g for g in dataset if g.y == 1]
     dataset_bkg = [g for g in dataset if g.y == 0]
 
+    # Calculate total global weight
     weights_sig_total = sum(g.weights for g in dataset_sig)
     weights_bkg_total = sum(g.weights for g in dataset_bkg)
 
-    scale_factor = weights_sig_total / weights_bkg_total
-    print("Scale factor:", scale_factor)
+    if weights_bkg_total == 0:
+        print("Error: Background total weight is 0. Check data.")
+        return
 
-    # multiply scale factor only to background
+    scale_factor = weights_sig_total / weights_bkg_total
+    print(f"Scale factor (Sig/Bkg total weight ratio): {scale_factor:.4f}")
+
+    # Apply scaling factor only to background so their total weights match
     for g in dataset_bkg:
         g.weights *= scale_factor
 
-    ## define architecture
+    # ---------------------------------------------------------
+    # 3. Split into training and validation sets
+    # ---------------------------------------------------------
     batch_size = config['architecture']['batch_size']
     test_size = config['architecture']['test_size']
 
-    dataset= shuffle(dataset_sig+dataset_bkg, random_state=42)
-    train_ds, validation_ds = train_test_split(dataset, test_size = test_size, random_state = 144)
+    # Shuffle data
+    dataset = shuffle(dataset_sig + dataset_bkg, random_state=42)
+    train_ds, validation_ds = train_test_split(dataset, test_size=test_size, random_state=144)
+    
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=config['num_workers'])
     val_loader = DataLoader(validation_ds, batch_size=batch_size, shuffle=False, num_workers=config['num_workers'])
 
+    print(f"Train samples: {len(train_ds)}, Val samples: {len(validation_ds)}")
 
-    print ("train dataset size:", len(train_ds))
-    print ("validation dataset size:", len(validation_ds))
-
+    # Compute node degrees (needed for PNA and similar models)
     deg = torch.zeros(100, dtype=torch.long)
     for data in dataset:
         d = degree(data.edge_index[1], num_nodes=data.num_nodes, dtype=torch.long)
         deg += torch.bincount(d, minlength=deg.numel())
 
-
+    # ---------------------------------------------------------
+    # 4. Model Initialization
+    # ---------------------------------------------------------
     n_epochs = config['architecture']['n_epochs']
     learning_rate = config['architecture']['learning_rate']
     choose_model = config['architecture']['choose_model']
     save_every_epoch = config['architecture']['save_every_epoch']
 
-    if choose_model == "LundNet":
-        model = LundNet()
-    if choose_model == "GATNet":
-        model = GATNet()
-    if choose_model == "GINNet":
-        model = GINNet()
-    if choose_model == "EdgeGinNet":
-        model = EdgeGinNet()
-    if choose_model == "PNANet":
-        model = PNANet()
-    if choose_model == "LundNet_plus_GN2X":
-        model = LundNet_plus_GN2X()
+    # Model choose
+    if choose_model == "LundNet": model = LundNet()
+    elif choose_model == "GATNet": model = GATNet()
+    elif choose_model == "GINNet": model = GINNet()
+    elif choose_model == "EdgeGinNet": model = EdgeGinNet()
+    elif choose_model == "PNANet": model = PNANet()
+    elif choose_model == "LundNet_plus_GN2X": model = LundNet_plus_GN2X()
+    else: raise ValueError(f"Unknown model: {choose_model}")
 
-    path_to_ckpt = config['retrain']['path_to_ckpt']
-
+    # Checkpoint-resume training logic
     if config['retrain']['flag']:
-        path = path_to_ckpt
-        model.load_state_dict(torch.load(path))
+        print(f"Loading checkpoint: {config['retrain']['path_to_ckpt']}")
+        model.load_state_dict(torch.load(config['retrain']['path_to_ckpt']))
 
+    # GPU settings
     if torch.cuda.is_available():
-        device_id = 'cuda' if config['gpu'] is None else 'cuda:'+str(config['gpu'])
+        device_id = 'cuda' if config['gpu'] is None else f'cuda:{config["gpu"]}'
     else:
         device_id = 'cpu'
     device = torch.device(device_id)
-    print(f'\nUsing device: {device}')
-
-    #model = torch.nn.DataParallel(model)
+    print(f'Using device: {device}')
     model.to(device)
     
+    # optimizer settings
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     optimizer_small = torch.optim.Adam(model.parameters(), lr=0.4*learning_rate)
     optimizer2 = torch.optim.Adam(model.parameters(), lr=4*learning_rate)
     optimizer3 = torch.optim.Adam(model.parameters(), lr=10*learning_rate)
 
+    # ---------------------------------------------------------
+    # 5. Adversarial-training setup (if enabled)
+    # ---------------------------------------------------------
     if do_combined_training:
         adv = Adversary_new(config['architecture']['lambda_parameter'], config['architecture']['num_gaussians'])
         adv.to(device)
         optimizer_adv = torch.optim.Adam(adv.parameters(), lr=5*learning_rate)
 
-    train_jds = []
-    val_jds = []
-
-    train_bgrej = []
-    val_bgrej = []
-
+    # ---------------------------------------------------------
+    # 6. Main training loop
+    # ---------------------------------------------------------
+    train_loss, val_loss = [], []
     model_name = config['data']['model_name'].format(ln_kT_cut=ln_kT_cut)
-    train_loss = []
-    val_loss = []
-    train_acc = []
-    val_acc = []
-
     timestamp = datetime.now().strftime("%d%m-%H%M")
     metrics_filename = os.path.join(path_to_save, f"losses_{model_name}_{timestamp}.txt")
 
+    print("\nStarting standard training...")
     for epoch in range(n_epochs):
-        train_loss.append(train_clas(train_loader, model, device, optimizer, optimizer2, optimizer3, epoch))
-        val_loss.append(my_test(val_loader, model, device))
+        t_loss = train_clas(train_loader, model, device, optimizer, optimizer2, optimizer3, epoch)
+        v_loss = my_test(val_loader, model, device)
+        
+        train_loss.append(t_loss)
+        val_loss.append(v_loss)
 
-        print('Epoch: {:03d}, Train Loss: {:.5f}, Val Loss: {:.5f}'.format(epoch, train_loss[epoch], val_loss[epoch]))
-        if save_every_epoch or epoch == n_epochs-1:
-            model_filename = os.path.join(path_to_save, f"{model_name}_e{epoch+1:03d}_{val_loss[epoch]:.5f}.pt")
+        print(f'Epoch: {epoch:03d}, Train Loss: {t_loss:.5f}, Val Loss: {v_loss:.5f}')
+        
+        if save_every_epoch or epoch == n_epochs - 1:
+            model_filename = os.path.join(path_to_save, f"{model_name}_e{epoch+1:03d}_{v_loss:.5f}.pt")
             torch.save(model.state_dict(), model_filename)
 
-    metrics = zip(train_loss, val_loss)
+    # save metrics
     with open(metrics_filename, mode='w', newline='') as file:
         writer = csv.writer(file)
         writer.writerow(["Train_Loss", "Val_Loss"])
-        writer.writerows(metrics)
+        writer.writerows(zip(train_loss, val_loss))
 
     if do_combined_training:
         adv_model_name = config['data']['adv_model_name']

@@ -2,9 +2,12 @@
 # Data and output paths
 # ============================================================
 data:
-  paths_to_test_file_root: "/share/lustre/yzhu/dijet_data/data_dijet_part1_0.25percent/data_dijet_part1_0.25percent_ln_kT_cut_None.root"
-  paths_to_test_file_graphs: "/share/lustre/yzhu/dijet_data/data_dijet_part1_0.25percent/graphs_dijet_part1_0.25percent_ln_kT_cut_None_with_pt*"
-  path_to_outdir: "/share/lustre/yzhu/srjtest/{sample}/"
+  paths_to_test_file_root: 
+  - "/share/lustre/yzhu/dijet_slice/part1_0.25percent/data_dijet_batch0_ln_kT_cut_None.root"
+  - "/share/lustre/yzhu/dijet_slice/part1_0.25percent/data_dijet_batch1_ln_kT_cut_None.root"
+  paths_to_test_file_graphs: 
+  - "/share/lustre/yzhu/dijet_slice/preprocessed/test/processed_graphs_dijet_batch*_ln_kT_cut_None_with_pt"
+  path_to_outdir: "/share/lustre/yzhu/dijet_slice/score"
 
   output_suffix: "_score_multiModel"
   sample: "TEST_05qcd_1z"
@@ -18,17 +21,17 @@ test:
 
   models_to_run:
 
-    - tag: "LundNet_nominal"        # Distinct Root branch names
+    - tag: "LundNet_0"        # Distinct Root branch names
       arch: "LundNet"               # Model type
-      ckpt: "/path/to/LundNet_nominal.pt"
+      ckpt: "/share/lustre/yzhu/dijet_slice/model/LundNet_dijet_ln_kT_cut_None_e001_0.42072.pt"
 
-    - tag: "LundNet_variation"      
-      arch: "LundNet"
-      ckpt: "/path/to/LundNet_variation.pt"
+    - tag: "LundNet_1"        # Distinct Root branch names
+      arch: "LundNet"               # Model type
+      ckpt: "/share/lustre/yzhu/dijet_slice/model/LundNet_dijet_ln_kT_cut_None_e002_0.40590.pt"
 
-    - tag: "GINNet_v1"              
-      arch: "GINNet"
-      ckpt: "/path/to/GINNet_v1.pt"
+    - tag: "LundNet_2"        # Distinct Root branch names
+      arch: "LundNet"               # Model type
+      ckpt: "/share/lustre/yzhu/dijet_slice/model/LundNet_dijet_ln_kT_cut_None_e004_0.39192.pt"
 
   # ROOT branch names：generated from TAG
   scores_branch_name: "fjet_{tag}_score"

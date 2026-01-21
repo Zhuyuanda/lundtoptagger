@@ -1,11 +1,15 @@
 # NOTE: it is assumed all data in a single file has the same DSID
 path_to_rootfiles: 
-- '/share/lustre/yzhu/dijet/user.yuanda.mc20_13TeV.364702.e7142_s3681_r13144_p6859.parent_ANALYSIS.root/*.root'
-- '/share/lustre/yzhu/dijet/user.yuanda.mc20_13TeV.364703.e7142_s3681_r13144_p6859.parent_ANALYSIS.root/*.root'
-- '/share/lustre/yzhu/dijet/user.yuanda.mc20_13TeV.364704.e7142_s3681_r13144_p6859.parent_ANALYSIS.root/*.root'
-- '/share/lustre/yzhu/dijet/user.yuanda.mc20_13TeV.364705.e7142_s3681_r13144_p6859.parent_ANALYSIS.root/*.root'
-- '/share/lustre/yzhu/dijet/user.yuanda.mc20_13TeV.364706.e7142_s3681_r13144_p6859.parent_ANALYSIS.root/*.root'
-- '/share/lustre/yzhu/dijet/user.yuanda.mc20_13TeV.364707.e7142_s3681_r13144_p6859.parent_ANALYSIS.root/*.root'  
+- '/share/lustre/yzhu/dijet/user.yuanda.mc20_13TeV.364700.e7142_s3681_r13144_p6859.20GeV_ANALYSIS.root/*.root'
+- '/share/lustre/yzhu/dijet/user.yuanda.mc20_13TeV.364701.e7142_s3681_r13144_p6859.20GeV_ANALYSIS.root/*.root'
+- '/share/lustre/yzhu/dijet/user.yuanda.mc20_13TeV.364702.e7142_s3681_r13144_p6859.20GeV_ANALYSIS.root/*.root'
+- '/share/lustre/yzhu/dijet/user.yuanda.mc20_13TeV.364703.e7142_s3681_r13144_p6859.20GeV_ANALYSIS.root/*.root'
+- '/share/lustre/yzhu/dijet/user.yuanda.mc20_13TeV.364704.e7142_s3681_r13144_p6859.20GeV_ANALYSIS.root/*.root'
+- '/share/lustre/yzhu/dijet/user.yuanda.mc20_13TeV.364705.e7142_s3681_r13144_p6859.20GeV_ANALYSIS.root/*.root'
+- '/share/lustre/yzhu/dijet/user.yuanda.mc20_13TeV.364706.e7142_s3681_r13144_p6859.20GeV_ANALYSIS.root/*.root'
+- '/share/lustre/yzhu/dijet/user.yuanda.mc20_13TeV.364707.e7142_s3681_r13144_p6859.20GeV_ANALYSIS.root/*.root'
+ 
+ 
 
 n_files: null
 
@@ -17,7 +21,7 @@ event_fraction_idx: null
 # event_fraction_idx: null
 
 
-out_dir: "/share/lustre/yzhu/dijet_slice/data_{id}{frac}"
+out_dir: "/share/lustre/yzhu/dijet_slice/"
 out_file_name_graphs: "graphs_{id}{frac}_ln_kT_cut_{kT_cut}{include_pt}"
 out_file_name_root: "data_{id}{frac}_ln_kT_cut_{kT_cut}.root"
 

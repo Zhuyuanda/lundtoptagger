@@ -2,261 +2,137 @@ import os
 import json
 import torch
 import numpy as np
+import uproot
+import glob
 import matplotlib.pyplot as plt
 
-from tools.GNN_model_weight.utils_newdata import load_yaml
+from tools.GNN_model_weight.utils_newdata import load_yaml, assign_flat_weights, assign_2d_flat_weights_kde
 from plotting.utils_plots_matplotlib import hist_with_errors
 
+# ============================================================
+# 1. Plotting Helper Function (Branching Logic: 1D vs 2D)
+# ============================================================
+def _save_plots(pts, etas, labels, weights_sig, weights_bkg, config, out_dir):
+    plot_dir = os.path.join(out_dir, "plots_validation")
+    os.makedirs(plot_dir, exist_ok=True)
+
+    sig_mask, bkg_mask = (labels == 1), (labels == 0)
+    pts_sig, pts_bkg = pts[sig_mask], pts[bkg_mask]
+    etas_sig, etas_bkg = etas[sig_mask], etas[bkg_mask]
+    
+    do_pt, do_eta = config.get("flatten_pt", False), config.get("flatten_eta", False)
+
+    if do_pt and not do_eta:
+        print("\n[Check] Plotting 1D validation (pT only)...")
+        plt.figure(figsize=(10, 6))
+        hist_with_errors(pts_bkg, bins=config["n_bins_pt"], density=True, label="Bkg (Before)")
+        hist_with_errors(pts_sig, bins=config["n_bins_pt"], density=True, label="Sgn (Before)")
+        plt.xlabel("SRJ pT [GeV]"); plt.ylabel("Density"); plt.legend(); plt.savefig(os.path.join(plot_dir, "pT_1D_before.png")); plt.close()
+
+        plt.figure(figsize=(10, 6))
+        hist_with_errors(pts_bkg, weights=weights_bkg, bins=config["n_bins_pt"], density=True, label="Bkg (After)")
+        hist_with_errors(pts_sig, weights=weights_sig, bins=config["n_bins_pt"], density=True, label="Sgn (After)")
+        plt.xlabel("SRJ pT [GeV]"); plt.ylabel("Density"); plt.legend(); plt.savefig(os.path.join(plot_dir, "pT_1D_after.png")); plt.close()
+
+    elif do_pt and do_eta:
+        print("\n[Check] Plotting 2D validation (pT & eta)...")
+        def plot_2d_mesh(p, e, w, title, filename):
+            plt.figure(figsize=(8, 6))
+            plt.hist2d(p, e, bins=(config["n_bins_pt"], config["n_bins_eta"]), weights=w, density=True, cmap='viridis', cmin=1e-12)
+            plt.colorbar(label="Density"); plt.xlabel("SRJ pT [GeV]"); plt.ylabel("SRJ η"); plt.title(title)
+            plt.savefig(os.path.join(plot_dir, filename)); plt.close()
+
+        plot_2d_mesh(pts_sig, etas_sig, None, "Signal 2D: Before", "2D_sig_before.png")
+        plot_2d_mesh(pts_sig, etas_sig, weights_sig, "Signal 2D: After 2D Flatten", "2D_sig_after.png")
+        plot_2d_mesh(pts_bkg, etas_bkg, None, "Background 2D: Before", "2D_bkg_before.png")
+        plot_2d_mesh(pts_bkg, etas_bkg, weights_bkg, "Background 2D: After 2D Flatten", "2D_bkg_after.png")
+
+    print(f"[Check] Validation plots saved to: {plot_dir}")
 
 # ============================================================
-#  Process one dataset (train or test)
+# 2. Core Processing Function
 # ============================================================
-def process_one_split(graph_paths, config,
-                      mean_x, std_x, mean_ntrk, std_ntrk,
-                      do_flatten, tag, out_dir):
+def process_one_split(graph_paths, config, mean_x, std_x, mean_ntrk, std_ntrk, do_flatten, tag, out_dir):
+    print(f"\n{'='*70}\n>>>>>> Starting Processing for [{tag.upper()}] <<<<<<\n{'='*70}")
+    os.makedirs(out_dir, exist_ok=True)
+    
+    all_graph_files = sorted(glob.glob(graph_paths[0]) if isinstance(graph_paths, list) and "*" in graph_paths[0] else graph_paths)
+    all_root_files = [os.path.join(os.path.dirname(g_p), os.path.basename(g_p).replace("graphs_", "data_").replace("_with_pt", "") + ".root") for g_p in all_graph_files]
 
-    is_train = (tag == "train")   
+    all_weights_sig, all_weights_bkg = None, None
+    pts, etas, labels = None, None, None
 
-    # ------------------------------------
-    # Load graph files
-    # ------------------------------------
-    if isinstance(graph_paths, str):
-        graph_paths = [graph_paths]
-
-    dataset = []
-    for path in graph_paths:
-        print(f"\nLoading {tag} graph file:", path)
-        dataset += torch.load(path, weights_only=False)
-
-    print(f"Total {tag} graphs loaded:", len(dataset))
-
-    # ------------------------------------
-    # Jet selection (consistent with training)
-    # ------------------------------------
-    if config["cut_pt_eta_mass"]:
-        sig_cfg = load_yaml(config["config_signal_path"])[config["signal"]]
-
-        pt_min, pt_max = sig_cfg["pt_range"]
-        m_min, m_max = sig_cfg["mass_range"]
-        eta_min = sig_cfg.get("eta_min", 0)
-        eta_max = sig_cfg.get("eta_max", 4.0)
-
-        dataset = [
-            g for g in dataset
-            if pt_min < g.pt < pt_max
-            and m_min < g.mass < m_max
-            and eta_min <= abs(g.eta) <= eta_max
-        ]
-        print(f"{tag}: remaining after cuts =", len(dataset))
-
-    # ------------------------------------
-    # Standardization
-    # ------------------------------------
-    print(f"\nStandardizing {tag} graphs...")
-
-    for g in dataset:
-        x = g.x.numpy()
-        x = (x - mean_x) / std_x
-        g.x = torch.from_numpy(x).float()
-
-        g.Ntrk = ((g.Ntrk - mean_ntrk) / std_ntrk).float()
-
-    # ------------------------------------
-    # Prepare arrays for plotting / flattening
-    # ------------------------------------
-    labels = np.array([g.y for g in dataset])
-    pts = np.array([g.pt for g in dataset])
-    etas = np.array([g.eta for g in dataset])
-
-    # ------------------------------------
-    # Flatten (train only)
-    # ------------------------------------
+    # Stage 1: Scan ROOT
     if do_flatten:
-        print(f"\nFlattening {tag} dataset...")
+        print(f"--- [{tag}] Stage 1: Calculating Global Weights ---")
+        pts_list, etas_list, labels_list = [], [], []
+        for r_path in all_root_files:
+            with uproot.open(r_path) as f:
+                tree = f["FlatSubstructureJetTree"]
+                pts_list.append(tree["fjet_pt"].array(library="np"))
+                etas_list.append(tree["fjet_eta"].array(library="np"))
+                labels_list.append(tree["labels"].array(library="np"))
+        pts, etas, labels = np.concatenate(pts_list), np.concatenate(etas_list), np.concatenate(labels_list)
 
-        from tools.GNN_model_weight.utils_newdata import (
-            assign_flat_weights,
-            assign_2d_flat_weights_kde,
-        )
-
-        do_2d = config["flatten_pt"] and config["flatten_eta"]
-        do_1d = config["flatten_pt"] and not config["flatten_eta"]
-
+        do_2d = config.get("flatten_pt", False) and config.get("flatten_eta", False)
         if do_2d:
-            weights_sig = assign_2d_flat_weights_kde(etas[labels==1], pts[labels==1])
-            weights_bkg = assign_2d_flat_weights_kde(etas[labels==0], pts[labels==0])
+            all_weights_sig = assign_2d_flat_weights_kde(etas[labels==1], pts[labels==1])
+            all_weights_bkg = assign_2d_flat_weights_kde(etas[labels==0], pts[labels==0])
         else:
-            weights_sig = assign_flat_weights(pts[labels==1], n_bins=config["n_bins_pt"])
-            weights_bkg = assign_flat_weights(pts[labels==0], n_bins=config["n_bins_pt"])
+            all_weights_sig = assign_flat_weights(pts[labels==1], n_bins=config["n_bins_pt"])
+            all_weights_bkg = assign_flat_weights(pts[labels==0], n_bins=config["n_bins_pt"])
+        sig_ptr, bkg_ptr = 0, 0
 
-        # Store weights
-        sig_graphs = [g for g in dataset if g.y == 1]
-        bkg_graphs = [g for g in dataset if g.y == 0]
+    # Stage 2: Transform and Statistics Print
+    print(f"\n--- [{tag}] Stage 2: Applying Transforms ---")
+    # Print Next Operation 
+    mode_str = "2D Flatten (pT & eta)" if (do_flatten and config.get("flatten_eta")) else "1D Flatten (pT only)" if do_flatten else "No Flatten (Test set)"
+    print(f"[Action] Standardization: Enabled using global train stats.")
+    print(f"[Action] Reweighting: {mode_str}")
 
-        for g, w in zip(sig_graphs, weights_sig):
-            g.weights = float(w)
-        for g, w in zip(bkg_graphs, weights_bkg):
-            g.weights = float(w)
+    for idx, g_path in enumerate(all_graph_files):
+        dataset = torch.load(g_path, weights_only=False)
+        
+        for g in dataset:
+            # 1. Std
+            g.x = torch.from_numpy((g.x.numpy() - mean_x) / std_x).float()
+            g.Ntrk = torch.tensor((float(g.Ntrk) - mean_ntrk) / std_ntrk).float()
+            # 2. Flatten
+            if do_flatten:
+                if g.y == 1: g.weights = float(all_weights_sig[sig_ptr]); sig_ptr += 1
+                else: g.weights = float(all_weights_bkg[bkg_ptr]); bkg_ptr += 1
+            else: g.weights = 1.0
 
-    else:
-        print(f"\nSkipping flattening for {tag} dataset.")
-        weights_sig = np.ones(sum(labels == 1))
-        weights_bkg = np.ones(sum(labels == 0))
+        # --- Statistical Snapshot per Batch ---
+        all_x = torch.cat([data.x for data in dataset], dim=0).numpy()
+        all_w = np.array([data.weights for data in dataset])
+        print(f"  Batch {idx} | Mean(x): {np.mean(all_x):.4f} (exp~0) | Std(x): {np.std(all_x):.4f} (exp~1) | WeightAvg: {np.mean(all_w):.4f}")
 
+        torch.save(dataset, os.path.join(out_dir, f"processed_{os.path.basename(g_path)}"))
+        del dataset
 
-    # ============================================================
-    #  Visualization (TRAIN ONLY)
-    # ============================================================
-    if is_train:
-        print("\n=== Saving SRJ distributions BEFORE and AFTER flattening ===")
-
-        plot_dir = os.path.join(config['data']['out_dir'], "plots_before_after")
-        os.makedirs(plot_dir, exist_ok=True)
-
-        sig_mask = (labels == 1)
-        bkg_mask = (labels == 0)
-
-        pts_sig, pts_bkg = pts[sig_mask], pts[bkg_mask]
-        etas_sig, etas_bkg = etas[sig_mask], etas[bkg_mask]
-
-        do_2d = config["flatten_pt"] and config["flatten_eta"]
-        do_1d = config["flatten_pt"] and not config["flatten_eta"]
-
-        # ========================================================
-        # 1D pT BEFORE
-        # ========================================================
-        plt.figure()
-        hist_with_errors(pts_bkg, bins=config["n_bins_pt"], density=True,
-                         fmt=".", capsize=2, label="Background")
-        hist_with_errors(pts_sig, bins=config["n_bins_pt"], density=True,
-                         fmt=".", label="Signal")
-        plt.xlabel("SRJ pT [GeV]")
-        plt.ylabel("Density")
-        plt.legend()
-        plt.savefig(os.path.join(plot_dir, "pT_before.png"))
-        plt.close()
-
-        # AFTER only for 1D flatten
-        if do_1d:
-            plt.figure()
-            hist_with_errors(pts_bkg, weights=weights_bkg, bins=config["n_bins_pt"],
-                             density=True, fmt=".", capsize=2, label="Background")
-            hist_with_errors(pts_sig, weights=weights_sig, bins=config["n_bins_pt"],
-                             density=True, fmt=".", label="Signal")
-            plt.xlabel("SRJ pT [GeV]")
-            plt.ylabel("Density")
-            plt.legend()
-            plt.savefig(os.path.join(plot_dir, "pT_after.png"))
-            plt.close()
-
-        # ========================================================
-        # 1D η BEFORE
-        # ========================================================
-        plt.figure()
-        hist_with_errors(etas_bkg, bins=config["n_bins_eta"], density=True,
-                         fmt=".", capsize=2, label="Background")
-        hist_with_errors(etas_sig, bins=config["n_bins_eta"], density=True,
-                         fmt=".", label="Signal")
-        plt.xlabel("SRJ η")
-        plt.ylabel("Density")
-        plt.legend()
-        plt.savefig(os.path.join(plot_dir, "eta_before.png"))
-        plt.close()
-
-        # ========================================================
-        # 2D BEFORE (only plotting BEFORE for train)
-        # ========================================================
-        plt.figure()
-        H, xedges, yedges = np.histogram2d(
-            pts_sig, etas_sig,
-            bins=(config["n_bins_pt"], config["n_bins_eta"]),
-            density=True
-        )
-        cmin = H[H > 0].min()
-        plt.hist2d(pts_sig, etas_sig,
-                   bins=(config["n_bins_pt"], config["n_bins_eta"]),
-                   density=True, cmin=cmin)
-        plt.colorbar(label="Density")
-        plt.xlabel("SRJ pT [GeV]")
-        plt.ylabel("SRJ η")
-        plt.savefig(os.path.join(plot_dir, "2D_sig_before.png"))
-        plt.close()
-
-        # ========================================================
-        # 2D AFTER (only for 2D flatten)
-        # ========================================================
-        if do_2d:
-            plt.figure()
-            H2, _, _ = np.histogram2d(
-                pts_sig, etas_sig,
-                bins=(config["n_bins_pt"], config["n_bins_eta"]),
-                weights=weights_sig, density=True
-            )
-            cmin2 = H2[H2 > 0].min()
-            plt.hist2d(pts_sig, etas_sig,
-                       bins=(config["n_bins_pt"], config["n_bins_eta"]),
-                       weights=weights_sig, density=True, cmin=cmin2)
-            plt.colorbar(label="Density")
-            plt.xlabel("SRJ pT [GeV]")
-            plt.ylabel("SRJ η")
-            plt.savefig(os.path.join(plot_dir, "2D_sig_after.png"))
-            plt.close()
-
-        print("\n✓ Finished plotting before/after flattening.\n")
-
-    # ============================================================
-    # Save processed dataset
-    # ============================================================
-    outfile = os.path.join(out_dir, f"processed_SRJ_{tag}.pt")
-    torch.save(dataset, outfile)
-    print(f"\n✓ Saved {tag} dataset → {outfile}")
-    print("-" * 60)
-
-
+    if tag == "train" and do_flatten:
+        _save_plots(pts, etas, labels, all_weights_sig, all_weights_bkg, config, out_dir)
 
 # ============================================================
-#  Main function
+# 3. Main Program
 # ============================================================
 def preprocess_SRJ_CPU(config):
-
-    # Load mean/std JSON
     stats = json.load(open(config["data"]["meanstd_json"]))
-    mean_x = np.array(stats["mean_x"], dtype=np.float32)
-    std_x  = np.array(stats["std_x"], dtype=np.float32)
-    mean_ntrk = float(stats["mean_ntrk"])
-    std_ntrk  = float(stats["std_ntrk"])
+    mean_x, std_x = np.array(stats["mean_x"], dtype=np.float32), np.array(stats["std_x"], dtype=np.float32)
+    mean_ntrk, std_ntrk = float(stats["mean_ntrk"]), float(stats["std_ntrk"])
 
-    out_dir = config["data"]["out_dir"]
+    base_out_dir = config["data"]["out_dir"]
+    train_out = os.path.join(base_out_dir, "train")
+    process_one_split(config["data"]["train_graphs"], config, mean_x, std_x, mean_ntrk, std_ntrk, True, "train", train_out)
 
-    # TRAIN (with flatten)
-    process_one_split(
-        graph_paths = config["data"]["train_graphs"],
-        config = config,
-        mean_x = mean_x, std_x = std_x,
-        mean_ntrk = mean_ntrk, std_ntrk = std_ntrk,
-        do_flatten = True,
-        tag = "train",
-        out_dir = out_dir
-    )
-
-    # TEST (no flatten)
     if "test_graphs" in config["data"]:
-        process_one_split(
-            graph_paths = config["data"]["test_graphs"],
-            config = config,
-            mean_x = mean_x, std_x = std_x,
-            mean_ntrk = mean_ntrk, std_ntrk = std_ntrk,
-            do_flatten = False,
-            tag = "test",
-            out_dir = out_dir
-        )
-
+        test_out = os.path.join(base_out_dir, "test")
+        process_one_split(config["data"]["test_graphs"], config, mean_x, std_x, mean_ntrk, std_ntrk, False, "test", test_out)
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("config", help="Config YAML")
+    parser.add_argument("config")
     args = parser.parse_args()
-
-    config = load_yaml(args.config)
-    preprocess_SRJ_CPU(config)
+    preprocess_SRJ_CPU(load_yaml(args.config))

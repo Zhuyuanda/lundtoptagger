@@ -4,9 +4,8 @@
 # exclude nodes that do NOT mount /share/lustre properly
 #SBATCH --exclude=compute-0-21
 #SBATCH -N 1
-#SBATCH -n 16                   # 16 CPU cores
-#SBATCH --mem=120G              # 50GB 内存（KDE 用得上）
-#SBATCH --time=48:00:00         # 最长两天
+#SBATCH -n 8                   # 16 CPU cores
+#SBATCH --mem=50G              # 50GB (kde flattening)
 #SBATCH --export=ALL
 #SBATCH --output=/home/yuanda/srj/lundtoptagger/preprocess_log/slurm-%j.out
 #SBATCH --error=/home/yuanda/srj/lundtoptagger/preprocess_log/slurm-%j.err

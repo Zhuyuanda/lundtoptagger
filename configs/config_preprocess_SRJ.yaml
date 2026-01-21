@@ -4,15 +4,16 @@
 
 data:
   train_graphs:
-    - "/share/lustre/yzhu/dijet_data/data_dijet_part0_0.25percent/graphs_dijet_part0_0.25percent_ln_kT_cut_None_with_pt"
-
+    - "/share/lustre/yzhu/dijet_slice/part0_0.25percent/graphs_dijet_batch0_ln_kT_cut_None_with_pt"
+    - "/share/lustre/yzhu/dijet_slice/part0_0.25percent/graphs_dijet_batch1_ln_kT_cut_None_with_pt"
   test_graphs:
-    - "/share/lustre/yzhu/dijet_data/data_dijet_part1_0.25percent/graphs_dijet_part1_0.25percent_ln_kT_cut_None_with_pt"
+    - "/share/lustre/yzhu/dijet_slice/part1_0.25percent/graphs_dijet_batch0_ln_kT_cut_None_with_pt"
+    - "/share/lustre/yzhu/dijet_slice/part1_0.25percent/graphs_dijet_batch1_ln_kT_cut_None_with_pt"
 
-  out_dir: "/home/yuanda/srj/lundtoptagger/preprocess_log"
+  out_dir: "/share/lustre/yzhu/dijet_slice/preprocessed"
 
   # mean/std JSON
-  meanstd_json: "/share/lustre/yzhu/dijet_data/data_dijet_part0_0.25percent/slice_meanstd_part0.json"
+  meanstd_json: "/share/lustre/yzhu/dijet_slice/part0_0.25percent/meanstd_part0.json"
 
 
 # ============================================================
