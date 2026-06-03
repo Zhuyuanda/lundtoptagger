@@ -66,7 +66,6 @@ def main():
         "fjet_m": "SRJ_mass", "fjet_pt": "SRJ_pt", "fjet_eta": "SRJ_eta",
         "fjet_phi": "SRJ_phi", "fjet_truth_label": "SRJ_partonTruthLabel",
         "fjet_Nconst": "SRJ_Nconst", "fjet_Nconst_Charged": "SRJ_Nconst_Charged",
-        "parT_score": "SRJ_QGScore",
     }
     additional_output_vars = ["EventInfo_mcEventWeight", "EventInfo_mcChannelNumber"]
 

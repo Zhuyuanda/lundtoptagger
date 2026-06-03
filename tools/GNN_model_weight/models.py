@@ -80,6 +80,56 @@ class Net(torch.nn.Module):
 #         #print(x.shape)
 #         return F.sigmoid(x)
 
+class LundNet_General(torch.nn.Module):
+    def __init__(self, extra_dim=1):
+        """
+        extra_dim: 拼接在图特征后的附加特征维度。
+        - 默认 1: 仅 Ntrk (基础 LundNet)
+        - 如果是 Lund + GN3X: 1 (Ntrk) + 9 (GN3X) = 10
+        - 如果是 Lund + B-tag: 1 (Ntrk) + 1 (phbb) = 2
+        """
+        super(LundNet_General, self).__init__()
+        # EdgeConv 层: 结构与 LundNet 保持完全一致
+        self.conv1 = EdgeConv(nn.Sequential(nn.Linear(6, 32), nn.BatchNorm1d(32), nn.ReLU(),
+                                            nn.Linear(32, 32), nn.BatchNorm1d(32), nn.ReLU()), aggr='add')
+        self.conv2 = EdgeConv(nn.Sequential(nn.Linear(64, 32), nn.BatchNorm1d(32), nn.ReLU(),
+                                            nn.Linear(32, 32), nn.BatchNorm1d(32), nn.ReLU()), aggr='add')
+        self.conv3 = EdgeConv(nn.Sequential(nn.Linear(64, 64), nn.BatchNorm1d(64), nn.ReLU(),
+                                            nn.Linear(64, 64), nn.BatchNorm1d(64), nn.ReLU()), aggr='add')
+        self.conv4 = EdgeConv(nn.Sequential(nn.Linear(128, 64), nn.BatchNorm1d(64), nn.ReLU(),
+                                            nn.Linear(64, 64), nn.BatchNorm1d(64), nn.ReLU()), aggr='add')
+        self.conv5 = EdgeConv(nn.Sequential(nn.Linear(128, 128), nn.BatchNorm1d(128), nn.ReLU(),
+                                            nn.Linear(128, 128), nn.BatchNorm1d(128), nn.ReLU()), aggr='add')
+        self.conv6 = EdgeConv(nn.Sequential(nn.Linear(256, 128), nn.BatchNorm1d(128), nn.ReLU(),
+                                            nn.Linear(128, 128), nn.BatchNorm1d(128), nn.ReLU()), aggr='add')
+
+        self.seq1 = nn.Sequential(nn.Linear(448, 384), nn.BatchNorm1d(384), nn.ReLU())
+        
+        # 核心修改点：输入维度 = 384 (GNN) + extra_dim
+        self.seq2 = nn.Sequential(nn.Linear(384 + extra_dim, 256), nn.ReLU())
+        self.lin = nn.Linear(256, 1)
+
+    def forward(self, data, extra_x):
+        """
+        extra_x: 已经拼接好的外部特征 Tensor (batch, extra_dim)
+        """
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+        
+        # 1. 提取图特征
+        x1 = self.conv1(x, edge_index); x2 = self.conv2(x1, edge_index)
+        x3 = self.conv3(x2, edge_index); x4 = self.conv4(x3, edge_index)
+        x5 = self.conv5(x4, edge_index); x6 = self.conv6(x5, edge_index)
+        
+        x_gnn = torch.cat((x1, x2, x3, x4, x5, x6), dim=1)
+        x_gnn = self.seq1(x_gnn)
+        x_gnn = global_mean_pool(x_gnn, batch) # (batch, 384)
+        
+        # 2. 拼接外部特征 (extra_x 必须包含 Ntrk)
+        x_combined = torch.cat([x_gnn, extra_x], dim=1)
+            
+        x_combined = self.seq2(x_combined)
+        x_combined = F.dropout(x_combined, p=0.1, training=self.training)
+        return torch.sigmoid(self.lin(x_combined))
 
 
 class LundNet(torch.nn.Module):

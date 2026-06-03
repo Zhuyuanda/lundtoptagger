@@ -1,0 +1,36 @@
+data:
+  paths_to_test_file_root: 
+  - "/share/lustre/yzhu/IOP_DATA/part5_2percent/data_TopTagging_LRJ_batch*_ln_kT_cut_None.root"
+  
+  paths_to_test_file_graphs: 
+  - "/share/lustre/yzhu/IOP_DATA/preprocessed/test/processed_graphs_TopTagging_LRJ_batch*_ln_kT_cut_None_with_pt.pt"
+  
+  path_to_outdir: "/share/lustre/yzhu/IOP_DATA/score_LRJ"
+  sample: "TopTagging_LRJ"
+  kT_cut: "None"
+
+test:
+  batch_size: 1024
+  scores_branch_name: "LRJ_{tag}_score"
+  
+  # 需要通过 LundNet 模型推理的组合
+  models_to_run:
+    - tag: "only"
+      extra_dim: 1
+      ckpt: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_only/best_model_lund_only.pt"
+
+    - tag: "b50"
+      extra_dim: 2
+      ckpt: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_b50/best_model_lund_b50.pt"
+
+    - tag: "b75"
+      extra_dim: 2
+      ckpt: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_b75/best_model_lund_b75.pt"
+
+    - tag: "part"
+      extra_dim: 2
+      ckpt: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_part/best_model_lund_part.pt"
+
+    - tag: "gn3x"
+      extra_dim: 10
+      ckpt: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_gn3x/best_model_lund_gn3x.pt"

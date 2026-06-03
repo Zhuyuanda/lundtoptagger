@@ -1,0 +1,21 @@
+# ============================================================
+# LRJ manual training config (single run)
+# Batch training: bash submit/lrj/03_train_all.sh
+# ============================================================
+data:
+  path_to_trainfiles: "/share/lustre/yzhu/IOP_DATA/preprocessed/train/processed_*.pt"
+  path_to_save: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_gn3x"
+
+architecture:
+  choose_model: "LundNet_General"
+  training_mode: "lund_gn3x"
+  extra_dim: 10
+  batch_size: 1024
+  learning_rate: 0.0004
+  n_epochs: 35
+  patience: 8
+  test_size: 0.1
+  optimizer_schedule: [8, 16]
+
+gpu: 0
+num_workers: 0

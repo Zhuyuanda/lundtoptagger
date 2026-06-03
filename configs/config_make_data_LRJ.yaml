@@ -1,0 +1,39 @@
+# ======================================================================
+# LRJ Make Data Config (SRJ-Style Workflow - Step 1: Pure Extraction)
+# ======================================================================
+
+# 输入路径
+path_to_rootfiles: 
+- '/share/lustre/yzhu/jetm2_fixed/user.yuanda.mc20_13TeV.364703.e7142_s3681_r13144_r13146_p7053.fixed_jetm2_ANALYSIS.root/*.root'
+- '/share/lustre/yzhu/jetm2_fixed/user.yuanda.mc20_13TeV.364704.e7142_s3681_r13144_r13146_p7053.fixed_jetm2_ANALYSIS.root/*.root'
+- '/share/lustre/yzhu/jetm2_fixed/user.yuanda.mc20_13TeV.364705.e7142_s3681_r13144_r13146_p7053.fixed_jetm2_ANALYSIS.root/*.root'
+- '/share/lustre/yzhu/jetm2_fixed/user.yuanda.mc20_13TeV.364706.e7142_s3681_r13144_r13146_p7053.fixed_jetm2_ANALYSIS.root/*.root'
+- '/share/lustre/yzhu/jetm2_fixed/user.yuanda.mc20_13TeV.364707.e7142_s3681_r13144_r13146_p7053.fixed_jetm2_ANALYSIS.root/*.root'
+- '/share/lustre/yzhu/jetm2_fixed/user.yuanda.mc20_13TeV.426345.e6880_s3681_r13144_r13146_p7053.fixed_jetm2_ANALYSIS.root/*.root'
+n_files: null
+
+# 数据分片逻辑 (Train/Val/Test 划分的基础)
+event_fractions: {0.0025: 2, 0.005: 1, 0.01: 2, 0.02: 1, 0.05: 19}
+event_fraction_idx: null
+
+# 输出路径与命名规则
+out_dir: "/share/lustre/yzhu/IOP_DATA/"
+out_file_name_graphs: "graphs_{id}{frac}_ln_kT_cut_{kT_cut}{include_pt}.pt"
+out_file_name_root: "data_{id}{frac}_ln_kT_cut_{kT_cut}.root"
+
+# 数据集标识和批次大小控制（防止内存溢出）
+id: "TopTagging_LRJ"
+max_jets_per_batch: 10000
+
+# ======================================================================
+# Signal & Feature Config
+# ======================================================================
+signal_config_file: "configs/config_signal_LRJ.yaml"
+signal: top  
+
+# 在 SRJ 工作流的第一步，我们不再直接计算权重，所以置为 False
+signal_name_in_weight: False  
+
+# 拓扑与特征设置
+kT_cut: null           # 如果你想过滤软辐射，可以设为 0.0 或更高
+include_pt: True       # 必须为 True，第二步 preprocess 计算 pT 权重时需要它

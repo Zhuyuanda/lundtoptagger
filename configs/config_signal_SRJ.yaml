@@ -22,7 +22,7 @@ srj:
   mass_range: [0, .inf]       # SRJ.
 
   # abs eta cut
-  eta_min: 0.0
+  eta_min: 2.0
   eta_max: 4.0
 
   min_splits: 3               # Minimum number of split nodes

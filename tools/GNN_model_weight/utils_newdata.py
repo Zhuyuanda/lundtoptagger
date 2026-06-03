@@ -698,6 +698,101 @@ def create_train_dataset_fulld_new_Ntrk_pt_weight_file(
         
     return graphs
 
+def lrj_create_train_dataset_pure(
+    graphs: list,
+    z, k, d, edge1, edge2, label, dsids, Ntracks, jet_pts, jet_ms, jet_etas,
+    extra_features: dict,
+    kT_selection: Union[float, None],
+    primary_Lund_only_one_arr: list,
+    passed_selection: list,
+    signal_jet_truth_labels: set,
+    signal_dsids: set,
+    pt_range: tuple = (350, 3100),
+    mass_range: tuple = (40, float('inf')),
+    eta_max: float = 2.0,
+    min_splits: int = 3,
+    include_pt: bool = True,
+) -> list:
+    """
+    SRJ Workflow 风格的纯净版 LRJ 图数据集构建函数。
+    - 标签逻辑：Truth label 在 signal_jet_truth_labels 中标为信号(1.0)，其余全部为背景(0.0)。
+    - 不包含任何特征归一化（留给 preprocess 阶段）。
+    - 仅使用规定的依赖库。
+    """
+    kT_threshold = kT_selection if kT_selection is not None else -np.inf
+
+    for i in trange(len(z), desc="Building pure LRJ graphs"):
+        
+        # 1. 物理动力学筛选
+        if not (pt_range[0] < jet_pts[i] < pt_range[1] and
+                mass_range[0] < jet_ms[i] < mass_range[1] and
+                abs(jet_etas[i]) < eta_max and
+                len(z[i]) >= min_splits):
+            passed_selection.append(False)
+            continue
+
+        # 2. 标签映射：truth label + DSID 匹配 signal config 则为 1.0，其余为背景 0.0
+        if signal_dsids:
+            is_signal = (label[i] in signal_jet_truth_labels) and (dsids[i] in signal_dsids)
+        else:
+            is_signal = label[i] in signal_jet_truth_labels
+        label_out = 1.0 if is_signal else 0.0
+        
+        # 3. 提取原始对数特征
+        z_raw = ak.to_numpy(z[i]) + 1e-4
+        k_raw = ak.to_numpy(k[i]) + 1e-4
+        d_raw = ak.to_numpy(d[i]) + 1e-4
+        
+        z_feat = np.log(1.0 / z_raw)
+        k_feat = np.log(k_raw)
+        d_feat = np.log(1.0 / d_raw)
+        ntrk_feat = float(Ntracks[i])
+
+        # 4. 拓扑过滤 (kT Cut) 与节点索引重映射
+        parent_idx = ak.to_numpy(edge2[i]) 
+        child_idx = ak.to_numpy(edge1[i]) 
+        
+        k_mask = k_feat > kT_threshold
+        if np.sum(k_mask) < 1:
+            passed_selection.append(False) 
+            primary_Lund_only_one_arr.append(1)
+            continue
+            
+        passed_selection.append(True)
+
+        # 重新映射保留下来的节点索引，保证 PyG 图结构的 edge_index 不越界
+        old_to_new_idx = np.cumsum(k_mask) - 1 
+        
+        edge_p, edge_c = [], []
+        for j in range(len(parent_idx)):
+            p, c = parent_idx[j], child_idx[j]
+            # 只有当父子节点都通过了 kT cut，才保留这条边
+            if p != -1 and k_mask[p] and k_mask[c]:
+                edge_p.append(old_to_new_idx[p])
+                edge_c.append(old_to_new_idx[c])
+        
+        # 5. 构建 PyG Data 对象 (仅使用通过 Mask 的节点)
+        x_torch = torch.tensor(np.vstack([d_feat[k_mask], z_feat[k_mask], k_feat[k_mask]]).T, dtype=torch.float)
+        edge_index = torch.tensor([edge_p, edge_c], dtype=torch.long)
+
+        graph = Data(
+            x = x_torch,
+            edge_index = edge_index,
+            y = torch.tensor([label_out], dtype=torch.float),
+            Ntrk = torch.tensor([ntrk_feat], dtype=torch.float),
+            mass = float(jet_ms[i])
+        )
+        
+        if include_pt:
+            graph.pt = float(jet_pts[i])
+
+        # 6. 动态属性绑定 (包括 GN3X, Transformer, B-tagging 等)
+        for name, feature_array in extra_features.items():
+            graph[name] = float(feature_array[i])
+
+        graphs.append(graph)
+
+    return graphs
 
 def srj_create_train_dataset_fulld_new_Ntrk_pt_file(
     graphs: list[Data],
@@ -1200,6 +1295,54 @@ def train(loader, model, device, optimizer):
 
         loss_all += data.num_graphs * loss.item()
         optimizer.step()
+    return loss_all / len(loader.dataset)
+
+
+def select_optimizer(epoch, optimizer1, optimizer2, optimizer3, boundaries=(8, 16)):
+    """Return the active Adam optimizer for the standard 1x/4x/10x schedule."""
+    if epoch < boundaries[0]:
+        return optimizer3
+    if epoch < boundaries[1]:
+        return optimizer2
+    return optimizer1
+
+
+def train_clas_general(
+    loader,
+    model,
+    device,
+    optimizer1,
+    optimizer2,
+    optimizer3,
+    epoch,
+    forward_fn,
+    min_batch_size=1024,
+    boundaries=(8, 16),
+):
+    """Like train_clas but with a custom forward pass (e.g. LundNet_General + extra features)."""
+    model.train()
+    loss_all = 0
+    active_opt = select_optimizer(epoch, optimizer1, optimizer2, optimizer3, boundaries)
+
+    for data in loader:
+        if len(data) < min_batch_size:
+            continue
+        data = data.to(device)
+        optimizer1.zero_grad()
+        optimizer2.zero_grad()
+        optimizer3.zero_grad()
+
+        output = forward_fn(model, data)
+        new_y = torch.reshape(data.y, (int(list(data.y.shape)[0]), 1))
+        new_w = torch.reshape(data.weights, (int(list(data.weights.shape)[0]), 1))
+
+        loss = F.binary_cross_entropy(output, new_y, weight=new_w)
+        loss.backward()
+        loss_all += data.num_graphs * loss.item()
+        active_opt.step()
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     return loss_all / len(loader.dataset)
 
 

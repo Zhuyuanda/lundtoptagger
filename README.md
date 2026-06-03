@@ -2,6 +2,69 @@
 
 Tag top and W jets using the LundNet model.
 
+This repository contains three workflows:
+
+| Workflow | Jet type | Scripts suffix |
+|----------|----------|----------------|
+| Legacy | large-R (original UChicago) | none |
+| SRJ | small-R | `_SRJ` |
+| LRJ | large-R (SRJ-style pipeline) | `_LRJ` |
+
+## LRJ workflow (large-R top tagging)
+
+Four-step pipeline:
+
+1. **Make data** — `Make_data_LRJ.py` → `graphs_*.pt` + `data_*.root`
+2. **Preprocess** — `preprocess_LRJ_CPU.py` → normalization + global pT flatten weights → `processed_*.pt`
+3. **Train** — `weight_ONLY_TRAINS_LRJ.py` (single training script; 3× Adam schedule at epochs 8/16)
+4. **Score** — `test_make_scores_LRJ.py` → `*_scored.root`
+
+Submit on UCL Hypatia:
+
+```bash
+sbatch submit/lrj/01_make_data.sh      # SLURM array 0-24
+sbatch submit/lrj/02_preprocess.sh
+bash   submit/lrj/03_train_all.sh       # 5 modes: lund_only, gn3x, b75, b50, part
+sbatch submit/lrj/04_score.sh
+```
+
+Manual single training run:
+
+```bash
+python weight_ONLY_TRAINS_LRJ.py configs/config_ONLY_TRAIN_LRJ.yaml
+```
+
+Training applies a fixed background reweight factor (`0.106138`) after preprocess pT flattening. Models are saved under `models_lrj/exp_{mode}/`. This scale factor was derived for **Top** tagging; W tagging may need a separate value.
+
+### W tagging (DSID 801859)
+
+Signal definitions live in [`configs/config_signal_LRJ.yaml`](configs/config_signal_LRJ.yaml) (`top:` and `W:` blocks), aligned with [`configs/config_signal.yaml`](configs/config_signal.yaml).
+
+| | Top | W |
+|--|-----|---|
+| `signal` key | `top` | `W` |
+| truth label | 1 | 2 |
+| signal DSID | 426345 | 801859 |
+| pT range [GeV] | 350–3100 | 200–3100 |
+| mass range [GeV] | 40–∞ | 40–300 |
+
+For W, add the 801859 JETM2 ROOT glob to `path_to_rootfiles` in [`configs/config_make_data_LRJ.yaml`](configs/config_make_data_LRJ.yaml), then:
+
+```bash
+SIGNAL=W DATA_ID=WTagging_LRJ sbatch --export=ALL,SIGNAL,W,DATA_ID submit/lrj/01_make_data.sh
+```
+
+Or manually:
+
+```bash
+python Make_data_LRJ.py configs/config_make_data_LRJ.yaml --override \
+    signal=W id=WTagging_LRJ \
+    path_to_rootfiles="['/share/lustre/.../364703.../*.root','/share/lustre/.../801859.../*.root']"
+```
+
+Update [`configs/config_preprocess_LRJ.yaml`](configs/config_preprocess_LRJ.yaml) graph globs to match `WTagging_LRJ` output paths before preprocess/train.
+
+SRJ scripts are unchanged and live under `submit/srj/`. Obsolete LRJ submit scripts are in `submit/archive/`.
 
 ## Setup
 

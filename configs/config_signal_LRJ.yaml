@@ -1,0 +1,38 @@
+# ======================================================================
+# LRJ Signal Config (aligned with configs/config_signal.yaml, LRJ workflow)
+# Step 2 preprocess computes pT flattening; pt_hist_files_* left empty here.
+# ======================================================================
+
+top:
+  signal_jet_truth_labels: [1]
+  dsids: [426345]
+  skip_dsids:
+    - 364700
+    - 364701
+    - 364702
+    - 801859
+  pt_range: [350, 3100]
+  mass_range: [40, .inf]
+  eta_max: 2.0
+  min_splits: 3
+  pt_hist_files_bkg:
+    dir_path: ""
+    files: {}
+  pt_hist_files_signal: {}
+
+W:
+  signal_jet_truth_labels: [2]
+  dsids: [801859]
+  skip_dsids:
+    - 364700
+    - 364701
+    - 364702
+    - 801661
+  pt_range: [200, 3100]
+  mass_range: [40, 300]
+  eta_max: 2.0
+  min_splits: 3
+  pt_hist_files_bkg:
+    dir_path: ""
+    files: {}
+  pt_hist_files_signal: {}
