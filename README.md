@@ -22,7 +22,7 @@ Four-step pipeline:
 Submit on UCL Hypatia:
 
 ```bash
-sbatch submit/lrj/01_make_data.sh      # SLURM array 0-24
+sbatch submit/lrj/01_make_data.sh      # SLURM array 0-1 (70% / 30%)
 sbatch submit/lrj/02_preprocess.sh
 bash   submit/lrj/03_train_all.sh       # 5 modes: lund_only, gn3x, b75, b50, part
 sbatch submit/lrj/04_score.sh
@@ -34,7 +34,7 @@ Manual single training run:
 python weight_ONLY_TRAINS_LRJ.py configs/config_ONLY_TRAIN_LRJ.yaml
 ```
 
-Training applies a fixed background reweight factor (`0.106138`) after preprocess pT flattening. Models are saved under `models_lrj/exp_{mode}/`. This scale factor was derived for **Top** tagging; W tagging may need a separate value.
+After preprocess pT flattening, training dynamically rescales background weights so total background weight equals total signal weight (`scale_factor = sum(w_sig) / sum(w_bkg)`), same as SRJ. Models are saved under `models_lrj/exp_{mode}/`.
 
 ### W tagging (DSID 801859)
 
@@ -44,7 +44,7 @@ Signal definitions live in [`configs/config_signal_LRJ.yaml`](configs/config_sig
 |--|-----|---|
 | `signal` key | `top` | `W` |
 | truth label | 1 | 2 |
-| signal DSID | 426345 | 801859 |
+| signal DSID | 801661 (Grid/Rucio) / 426345 (lustre legacy) | 801859 |
 | pT range [GeV] | 350–3100 | 200–3100 |
 | mass range [GeV] | 40–∞ | 40–300 |
 
@@ -65,6 +65,22 @@ python Make_data_LRJ.py configs/config_make_data_LRJ.yaml --override \
 Update [`configs/config_preprocess_LRJ.yaml`](configs/config_preprocess_LRJ.yaml) graph globs to match `WTagging_LRJ` output paths before preprocess/train.
 
 SRJ scripts are unchanged and live under `submit/srj/`. Obsolete LRJ submit scripts are in `submit/archive/`.
+
+### LRJ on PanDA (hypatia / lxplus)
+
+Steps 1–2 on PanDA: **Rucio container names only** → 2 jobs (70% train pool / 30% test pool). Training on UCL; train/val split still `test_size: 0.1` in training.
+
+| Step | Jobs | Script |
+|------|------|--------|
+| 1 Make data | 2 | `bash submit/panda/submit_make_data.sh` |
+| 2 Preprocess | 1 | `bash submit/panda/submit_preprocess.sh` |
+| 3 Train | UCL | `submit/lrj/03_train_all.sh` |
+
+1. Edit [`configs/rucio_datasets_lrj.yaml`](configs/rucio_datasets_lrj.yaml).
+2. `setupATLAS && lsetup panda` and valid proxy.
+3. See [`submit/panda/README_PANDA.md`](submit/panda/README_PANDA.md).
+
+Legacy HTCondor scripts: [`submit/archive/grid_htcondor/`](submit/archive/grid_htcondor/).
 
 ## Setup
 

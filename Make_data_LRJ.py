@@ -1,5 +1,6 @@
 import argparse
 import os
+import re
 import json
 import glob
 import time
@@ -18,6 +19,99 @@ from tools.utils_config import recursive_update, parse_dot_args
 
 print("Libraries loaded!")
 
+
+def _xrootd_url_variants(url):
+    """Return a list of URL forms to try for uproot.open(), from best to fallback.
+
+    uproot splits file paths on ':' to find an embedded ROOT object path.
+    This breaks several URL formats used by ATLAS grid sites.  Rather than
+    a fixed lookup table, we generate all plausible variants and try them in
+    order, stopping at the first that succeeds.
+
+    Variant order:
+      1. Unwrap nested redirector URLs  (Manchester/UKI pattern)
+      2. Percent-encode ':' in path     (RAL/STFC pattern)
+      3. Both transforms combined       (hypothetical future sites)
+      4. Original URL as last resort
+    """
+    if not (isinstance(url, str) and url.startswith("root://")):
+        return [url]
+
+    seen, variants = set(), []
+
+    def add(u):
+        if u and u not in seen:
+            seen.add(u)
+            variants.append(u)
+
+    def encode_path_colons(u):
+        m = re.match(r'^(root://[^/]+)(/.+)$', u)
+        if m:
+            authority, path = m.group(1), m.group(2)
+            if ':' in path:
+                return authority + path.replace(':', '%3A')
+        return u
+
+    def unwrap_nested(u):
+        m = re.match(r'^root://[^/]+//(root://.+)$', u)
+        return m.group(1) if m else u
+
+    unwrapped = unwrap_nested(url)
+    encoded   = encode_path_colons(url)
+    unwrapped_encoded = encode_path_colons(unwrapped)
+
+    add(unwrapped)            # fix 1: unwrap nested
+    add(encoded)              # fix 2: encode colons
+    add(unwrapped_encoded)    # fix 1+2: both
+    add(url)                  # original as last resort
+    return variants
+
+
+def _open_root_file(url):
+    """Open a ROOT file, automatically retrying with URL variants on failure.
+
+    Handles unknown XRootD URL formats by trying all plausible representations
+    and using the first that succeeds.  Only FileNotFoundError triggers a retry;
+    other errors (network timeouts, auth failures, etc.) propagate immediately.
+    """
+    variants = _xrootd_url_variants(url)
+    last_exc = None
+    for i, variant in enumerate(variants):
+        try:
+            return uproot.open(variant)
+        except FileNotFoundError as exc:
+            last_exc = exc
+            if i < len(variants) - 1:
+                print(f"  [url-fix] variant {i + 1} failed ({variant[:60]}...), retrying")
+    raise last_exc  # type: ignore[misc]
+
+
+def resolve_root_files(path_list, n_files=None):
+    """Resolve ROOT paths: local glob, explicit files, or root:// PFNs."""
+    files = []
+    for pat in path_list:
+        pat = pat.strip()
+        if not pat:
+            continue
+        if pat.startswith("root://"):
+            if "*" in pat:
+                matched = glob.glob(pat)
+                if matched:
+                    files.extend(sorted(matched))
+                else:
+                    files.append(pat)
+            else:
+                files.append(pat)
+        elif os.path.isfile(pat):
+            files.append(pat)
+        else:
+            files.extend(sorted(glob.glob(pat)))
+    files = sorted(set(files))
+    if n_files:
+        files = files[:n_files]
+    return files
+
+
 def main():
     parser = argparse.ArgumentParser(description="LRJ Data Prep (SRJ Workflow Style): Pure Extraction")
     parser.add_argument("config", help="job configuration file")
@@ -34,14 +128,35 @@ def main():
     signal = config["signal"]
     signals = [s for s in config_signal.keys() if s != "bkg_histos"] if signal == "all" else [signal]
 
-    path_list = [config["path_to_rootfiles"]] if isinstance(config["path_to_rootfiles"], str) else config["path_to_rootfiles"]
     files = []
-    for pat in path_list:
-        files.extend(glob.glob(pat))
-    if config.get("n_files"):
-        files = files[:config["n_files"]]
+    panda_in = os.environ.get("PANDA_INPUT_FILES", "").strip()
+    if panda_in:
+        files = [f for f in panda_in.replace(',', ' ').split() if f]
+        print(f"Using {len(files)} input files from PANDA_INPUT_FILES")
 
-    print(f"Processing {len(files)} files...")
+    pfn_cache = config.get("rucio_pfn_cache")
+    if not files and pfn_cache:
+        cache_path = pfn_cache.format(id=config["id"], signal=config["signal"])
+        if os.path.isfile(cache_path):
+            with open(cache_path) as f:
+                files = json.load(f)
+            print(f"Loaded {len(files)} PFNs from rucio_pfn_cache: {cache_path}")
+
+    if not files:
+        path_list = (
+            [config["path_to_rootfiles"]]
+            if isinstance(config["path_to_rootfiles"], str)
+            else list(config["path_to_rootfiles"] or [])
+        )
+        files = resolve_root_files(path_list, config.get("n_files"))
+
+    if not files:
+        raise RuntimeError(
+            "No input ROOT files. Set rucio_pfn_cache (Grid) or path_to_rootfiles."
+        )
+
+    entry_chunk_events = config.get("entry_chunk_events")
+    print(f"Processing {len(files)} files (entry_chunk_events={entry_chunk_events})...")
 
     # LRJ 高级属性映射 (含 GN3X, Transformers, B-Tagging)
     jet_property_names = {
@@ -102,86 +217,127 @@ def main():
                 f["FlatSubstructureJetTree"] = valid_tree
             print(f"Batch {b_idx} saved with {len(data_list)} jets.")
 
+        pt_min = min(config_signal[s]["pt_range"][0] for s in signals)
+        pt_max = max(config_signal[s]["pt_range"][1] for s in signals)
+        mass_min = min(config_signal[s]["mass_range"][0] for s in signals)
+        mass_max = max(config_signal[s]["mass_range"][1] for s in signals)
+        e_max = max(config_signal[s]["eta_max"] for s in signals)
+        lund_vars = ["jetLundZ", "jetLundKt", "jetLundDeltaR", "jetLundIDParent1", "jetLundIDParent2"]
+
+        def process_event_slice(tree, dsids, slice_start, slice_stop, avail_branches):
+            nonlocal dataset, batch_idx, out_tree_dict
+            nonlocal node_count, node_mean, node_M2, jet_count, jet_mean_ntrk, jet_M2_ntrk
+
+            raw_data = tree.arrays(avail_branches, entry_start=slice_start, entry_stop=slice_stop, library="ak")
+            jet_props = {k: ak.flatten(raw_data[k]) for k in raw_data.fields}
+
+            n_jets = ak.num(raw_data[avail_branches[0]])
+            jet_props["EventInfo_mcEventWeight"] = np.repeat(
+                tree["mcEventWeight"].array(entry_start=slice_start, entry_stop=slice_stop, library="np"),
+                n_jets,
+            )
+            jet_props["EventInfo_mcChannelNumber"] = np.repeat(dsids[slice_start:slice_stop], n_jets)
+
+            mask = (
+                (jet_props["LRJ_pt"] > pt_min)
+                & (jet_props["LRJ_pt"] < pt_max)
+                & (jet_props["LRJ_mass"] > mass_min)
+                & (jet_props["LRJ_mass"] < mass_max)
+                & (np.abs(jet_props["LRJ_eta"]) < e_max)
+            )
+
+            for val in ak.to_numpy(jet_props["LRJ_Nconst_Charged"][mask]).astype(float):
+                jet_mean_ntrk, jet_M2_ntrk, jet_count = welford_update(
+                    jet_mean_ntrk, jet_M2_ntrk, jet_count, val
+                )
+
+            raw_nodes = np.vstack([
+                np.log(1.0 / (ak.to_numpy(ak.flatten(jet_props["jetLundDeltaR"][mask])) + 1e-4)),
+                np.log(1.0 / (ak.to_numpy(ak.flatten(jet_props["jetLundZ"][mask])) + 1e-4)),
+                np.log(ak.to_numpy(ak.flatten(jet_props["jetLundKt"][mask])) + 1e-4),
+            ]).T
+            for v in raw_nodes:
+                node_mean, node_M2, node_count = welford_update(node_mean, node_M2, node_count, v)
+
+            passed_selection = []
+            aux_scores = {
+                k: jet_props[v]
+                for k, v in jet_property_names.items()
+                if v in jet_props and ("GN3" in v or "Trans" in v or "has" in v)
+            }
+
+            dataset = lrj_create_train_dataset_pure(
+                dataset,
+                *[jet_props[k] for k in lund_vars],
+                *[
+                    jet_props[k]
+                    for k in [
+                        "LRJ_truthLabel",
+                        "EventInfo_mcChannelNumber",
+                        "LRJ_Nconst_Charged",
+                        "LRJ_pt",
+                        "LRJ_mass",
+                        "LRJ_eta",
+                    ]
+                ],
+                extra_features=aux_scores,
+                kT_selection=config["kT_cut"],
+                primary_Lund_only_one_arr=primary_Lund_only_one_arr,
+                passed_selection=passed_selection,
+                signal_jet_truth_labels=set().union(
+                    *[config_signal[s]["signal_jet_truth_labels"] for s in signals]
+                ),
+                signal_dsids=set().union(*[config_signal[s]["dsids"] for s in signals]),
+                pt_range=(pt_min, pt_max),
+                mass_range=(mass_min, mass_max),
+                eta_max=e_max,
+                include_pt=config["include_pt"],
+            )
+
+            for out_n, in_n in jet_property_names.items():
+                if in_n in jet_props:
+                    out_tree_dict[out_n] = ak.concatenate(
+                        [out_tree_dict[out_n], jet_props[in_n][passed_selection]]
+                    )
+            for var in additional_output_vars:
+                out_tree_dict[var] = ak.concatenate(
+                    [out_tree_dict[var], jet_props[var][passed_selection]]
+                )
+
+            if len(dataset) >= max_jets_per_batch:
+                save_batch(dataset, out_tree_dict, batch_idx)
+                dataset, batch_idx = [], batch_idx + 1
+                out_tree_dict = {name: ak.Array([]) for name in out_tree_dict}
+                gc.collect()
+
         for file_num, file in enumerate(files, start=1):
-            with uproot.open(file) as infile:
+            print(f"  file {file_num}/{len(files)}: {os.path.basename(file)}")
+            with _open_root_file(file) as infile:
                 tree = infile["AnalysisTree"]
                 dsids = tree["dsid"].array(library="np")
-                if dsids[0] in set.intersection(*[set(config_signal[s]["skip_dsids"]) for s in signals]): continue
+                if dsids[0] in set.intersection(
+                    *[set(config_signal[s]["skip_dsids"]) for s in signals]
+                ):
+                    continue
 
                 total_e = tree.num_entries
                 start = int(total_e * sum(event_fractions[:frac_idx]))
                 stop = int(total_e * (sum(event_fractions[:frac_idx]) + event_fraction))
-                if start >= stop: continue
+                if start >= stop:
+                    continue
 
-                # 动态加载分支
-                lund_vars = ["jetLundZ", "jetLundKt", "jetLundDeltaR", "jetLundIDParent1", "jetLundIDParent2"]
-                avail_branches = [b for b in [*jet_property_names.values(), *lund_vars] if b in tree.keys()]
-                
-                raw_data = tree.arrays(avail_branches, entry_start=start, entry_stop=stop, library="ak")
-                jet_props = {k: ak.flatten(raw_data[k]) for k in raw_data.fields}
+                avail_branches = [
+                    b
+                    for b in [*jet_property_names.values(), *lund_vars]
+                    if b in tree.keys()
+                ]
 
-                n_jets = ak.num(raw_data[avail_branches[0]])
-                jet_props["EventInfo_mcEventWeight"] = np.repeat(tree["mcEventWeight"].array(entry_start=start, entry_stop=stop, library="np"), n_jets)
-                jet_props["EventInfo_mcChannelNumber"] = np.repeat(dsids[start:stop], n_jets)
+                chunk = entry_chunk_events or (stop - start)
+                for chunk_start in range(start, stop, chunk):
+                    chunk_stop = min(chunk_start + chunk, stop)
+                    process_event_slice(tree, dsids, chunk_start, chunk_stop, avail_branches)
 
-                # 获取信号物理筛选范围
-                pt_min = min(config_signal[s]["pt_range"][0] for s in signals)
-                pt_max = max(config_signal[s]["pt_range"][1] for s in signals)
-                mass_min = min(config_signal[s]["mass_range"][0] for s in signals)
-                mass_max = max(config_signal[s]["mass_range"][1] for s in signals)
-                e_max = max(config_signal[s]["eta_max"] for s in signals)
-                
-                # 预筛选掩码用于计算准确的 Welford 统计量
-                mask = (
-                    (jet_props["LRJ_pt"] > pt_min) & (jet_props["LRJ_pt"] < pt_max)
-                    & (jet_props["LRJ_mass"] > mass_min) & (jet_props["LRJ_mass"] < mass_max)
-                    & (np.abs(jet_props["LRJ_eta"]) < e_max)
-                )
-                
-                # Welford 更新 Ntrk
-                for val in ak.to_numpy(jet_props["LRJ_Nconst_Charged"][mask]).astype(float):
-                    jet_mean_ntrk, jet_M2_ntrk, jet_count = welford_update(jet_mean_ntrk, jet_M2_ntrk, jet_count, val)
-
-                # Welford 更新 原始对数特征
-                raw_nodes = np.vstack([
-                    np.log(1.0 / (ak.to_numpy(ak.flatten(jet_props["jetLundDeltaR"][mask])) + 1e-4)),
-                    np.log(1.0 / (ak.to_numpy(ak.flatten(jet_props["jetLundZ"][mask])) + 1e-4)),
-                    np.log(ak.to_numpy(ak.flatten(jet_props["jetLundKt"][mask])) + 1e-4)
-                ]).T
-                for v in raw_nodes: 
-                    node_mean, node_M2, node_count = welford_update(node_mean, node_M2, node_count, v)
-
-                # 创建纯净数据集
-                passed_selection = []
-                aux_scores = {k: jet_props[v] for k, v in jet_property_names.items() 
-                              if v in jet_props and ("GN3" in v or "Trans" in v or "has" in v)}
-
-                dataset = lrj_create_train_dataset_pure(
-                    dataset, *[jet_props[k] for k in lund_vars],
-                    *[jet_props[k] for k in ["LRJ_truthLabel", "EventInfo_mcChannelNumber", "LRJ_Nconst_Charged", "LRJ_pt", "LRJ_mass", "LRJ_eta"]],
-                    extra_features = aux_scores,
-                    kT_selection=config["kT_cut"], 
-                    primary_Lund_only_one_arr=primary_Lund_only_one_arr,
-                    passed_selection=passed_selection,
-                    signal_jet_truth_labels=set().union(*[config_signal[s]["signal_jet_truth_labels"] for s in signals]),
-                    signal_dsids=set().union(*[config_signal[s]["dsids"] for s in signals]),
-                    pt_range=(pt_min, pt_max), 
-                    mass_range=(mass_min, mass_max),
-                    eta_max=e_max,
-                    include_pt=config["include_pt"]
-                )
-
-                for out_n, in_n in jet_property_names.items():
-                    if in_n in jet_props:
-                        out_tree_dict[out_n] = ak.concatenate([out_tree_dict[out_n], jet_props[in_n][passed_selection]])
-                for var in additional_output_vars:
-                    out_tree_dict[var] = ak.concatenate([out_tree_dict[var], jet_props[var][passed_selection]])
-
-                if len(dataset) >= max_jets_per_batch:
-                    save_batch(dataset, out_tree_dict, batch_idx)
-                    dataset, batch_idx = [], batch_idx + 1
-                    out_tree_dict = {name: ak.Array([]) for name in out_tree_dict}
-                    gc.collect()
+            gc.collect()
 
         if dataset:
             save_batch(dataset, out_tree_dict, batch_idx)

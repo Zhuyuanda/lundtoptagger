@@ -12,8 +12,6 @@ from sklearn.utils import shuffle
 from tools.GNN_model_weight.models import LundNet_General
 from tools.GNN_model_weight.utils_newdata import load_yaml, train_clas_general
 
-FIXED_SCALE_FACTOR = 0.106138
-
 
 def get_extra_features(data, mode):
     device = data.y.device
@@ -77,7 +75,6 @@ def main():
     boundaries = tuple(schedule)
 
     print(f"--- [{datetime.now().strftime('%H:%M:%S')}] Loading dataset ---", flush=True)
-    print(f">>> Bkg scale factor: {FIXED_SCALE_FACTOR}", flush=True)
 
     all_shards = sorted(glob.glob(config["data"]["path_to_trainfiles"]))
     dataset = []
@@ -85,16 +82,28 @@ def main():
     for i, shard_path in enumerate(all_shards):
         shards = torch.load(shard_path, weights_only=False)
         for g in shards:
-            if g.y == 0:
-                g.weights *= FIXED_SCALE_FACTOR
             g.weights = torch.tensor(float(g.weights))
         dataset.extend(shards)
         del shards
         if i % 40 == 0:
             print(f"  > Loaded {i}/{len(all_shards)} shards...", flush=True)
 
+    dataset_sig = [g for g in dataset if g.y == 1]
+    dataset_bkg = [g for g in dataset if g.y == 0]
+    weights_sig_total = sum(g.weights for g in dataset_sig)
+    weights_bkg_total = sum(g.weights for g in dataset_bkg)
+
+    if weights_bkg_total == 0:
+        print("Error: Background total weight is 0. Check data.", flush=True)
+        return
+
+    scale_factor = weights_sig_total / weights_bkg_total
+    print(f">>> Scale factor (Sig/Bkg total weight ratio): {scale_factor:.6f}", flush=True)
+    for g in dataset_bkg:
+        g.weights *= scale_factor
+
     print(f"--- [{datetime.now().strftime('%H:%M:%S')}] Shuffling & splitting ---", flush=True)
-    dataset = shuffle(dataset, random_state=42)
+    dataset = shuffle(dataset_sig + dataset_bkg, random_state=42)
     train_ds, val_ds = train_test_split(
         dataset, test_size=config["architecture"]["test_size"], random_state=144
     )

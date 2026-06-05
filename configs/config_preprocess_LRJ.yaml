@@ -1,12 +1,11 @@
 data:
   train_graphs:
-    - "/share/lustre/yzhu/IOP_DATA/part6_5percent/graphs_TopTagging_LRJ_batch*_ln_kT_cut_None_with_pt.pt"
-  # 测试集通常不需要 pT flattening，保持原始分布以评估真实性能
+    - "/share/lustre/yzhu/IOP_DATA/part0_70percent/graphs_TopTagging_LRJ_batch*_ln_kT_cut_None_with_pt.pt"
   test_graphs:
-    - "/share/lustre/yzhu/IOP_DATA/part5_2percent/graphs_TopTagging_LRJ_batch*_ln_kT_cut_None_with_pt.pt"
+    - "/share/lustre/yzhu/IOP_DATA/part1_30percent/graphs_TopTagging_LRJ_batch*_ln_kT_cut_None_with_pt.pt"
   
   out_dir: "/share/lustre/yzhu/IOP_DATA/preprocessed"
-  meanstd_json: "/share/lustre/yzhu/IOP_DATA/part6_5percent/meanstd_part6.json"
+  meanstd_json: "/share/lustre/yzhu/IOP_DATA/part0_70percent/meanstd_part0.json"
 
 flatten_pt: True
 n_bins_pt: 100  # pT 划分的箱数

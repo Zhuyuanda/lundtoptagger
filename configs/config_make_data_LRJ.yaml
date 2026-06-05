@@ -13,7 +13,7 @@ path_to_rootfiles:
 n_files: null
 
 # 数据分片逻辑 (Train/Val/Test 划分的基础)
-event_fractions: {0.0025: 2, 0.005: 1, 0.01: 2, 0.02: 1, 0.05: 19}
+event_fractions: {0.7: 1, 0.3: 1}
 event_fraction_idx: null
 
 # 输出路径与命名规则
@@ -23,7 +23,8 @@ out_file_name_root: "data_{id}{frac}_ln_kT_cut_{kT_cut}.root"
 
 # 数据集标识和批次大小控制（防止内存溢出）
 id: "TopTagging_LRJ"
-max_jets_per_batch: 10000
+max_jets_per_batch: 5000
+entry_chunk_events: 50000
 
 # ======================================================================
 # Signal & Feature Config

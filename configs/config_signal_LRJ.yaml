@@ -5,7 +5,7 @@
 
 top:
   signal_jet_truth_labels: [1]
-  dsids: [426345]
+  dsids: [801661]
   skip_dsids:
     - 364700
     - 364701
