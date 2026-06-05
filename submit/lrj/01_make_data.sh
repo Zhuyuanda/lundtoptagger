@@ -8,7 +8,7 @@
 #SBATCH -N1
 #SBATCH -n 2
 #SBATCH --mem=64G
-#SBATCH --array=0-1%2
+#SBATCH --array=0-10%11   # indices 0-9 = train parts (7% each), 10 = test part (30%)
 #SBATCH --mail-user=ucaphue@ucl.ac.uk
 #SBATCH --mail-type=ALL
 #SBATCH --output=/home/yuanda/srj/lundtoptagger/log/slurm-%A_%a.out

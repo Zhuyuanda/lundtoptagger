@@ -3,6 +3,7 @@ import os
 import re
 import json
 import glob
+import random
 import time
 import gc
 
@@ -155,19 +156,54 @@ def main():
             "No input ROOT files. Set rucio_pfn_cache (Grid) or path_to_rootfiles."
         )
 
+    # Shuffle file list with a fixed seed so that files from different DSIDs are
+    # interleaved.  Without this, batches are DSID-pure when files are large
+    # (each file contributes more jets than max_jets_per_batch).  After shuffle,
+    # each batch crosses multiple files → representative DSID composition.
+    file_shuffle_seed = config.get("file_shuffle_seed", 42)
+    random.Random(file_shuffle_seed).shuffle(files)
+    print(f"File list shuffled (seed={file_shuffle_seed}): {len(files)} files")
+
     entry_chunk_events = config.get("entry_chunk_events")
     print(f"Processing {len(files)} files (entry_chunk_events={entry_chunk_events})...")
 
-    # LRJ 高级属性映射 (含 GN3X, Transformers, B-Tagging)
+    # LRJ 属性映射：graph-attr 名 → ROOT branch 名
+    # GN2v01 WP flags (b: top-3 SRJs by pT; c: top-2 SRJs by pT, b-veto embedded)
     jet_property_names = {
-        "fjet_m": "LRJ_mass", "fjet_pt": "LRJ_pt", "fjet_eta": "LRJ_eta", "fjet_phi": "LRJ_phi", 
-        "fjet_truth_label": "LRJ_truthLabel", "fjet_Nconst_Charged": "LRJ_Nconst_Charged",
-        "has_inclusive_b": "LRJ_hasInclusiveB", "has_reco_b75": "LRJ_hasRecoB_75", "has_reco_b50": "LRJ_hasRecoB_50",
-        "GN3X_phtautauhad": "GN3XPV01_phtautauhad", "GN3X_phbb": "GN3XPV01_phbb", "GN3X_phcc": "GN3XPV01_phcc",
-        "GN3X_ptop": "GN3XPV01_ptop", "GN3X_pqcdbb": "GN3XPV01_pqcdbb", "GN3X_pqcdbx": "GN3XPV01_pqcdbx",
-        "GN3X_pqcdcx": "GN3XPV01_pqcdcx", "GN3X_pqcdll": "GN3XPV01_pqcdll", "GN3X_pWqq": "GN3XPV01_pWqq",
-        "WTrans_massdec": "LRJ_WTransformer_massdec_ConstScore", "WTrans_score": "LRJ_WTransformer_ConstScore",
-        "TopTrans_score": "LRJ_TopTransformer_ConstScore",
+        # Kinematics & truth
+        "fjet_m":             "LRJ_mass",
+        "fjet_pt":            "LRJ_pt",
+        "fjet_eta":           "LRJ_eta",
+        "fjet_phi":           "LRJ_phi",
+        "fjet_truth_label":   "LRJ_truthLabel",
+        "fjet_Nconst_Charged":"LRJ_Nconst_Charged",
+        # Truth b/c flags
+        "has_inclusive_b":    "LRJ_hasInclusiveB",
+        "has_inclusive_c":    "LRJ_hasInclusiveC",
+        # GN2v01 reco b-WP flags  (FixedCutBEff_XX)
+        "has_reco_b_WP65":    "LRJ_hasRecoB_WP65",
+        "has_reco_b_WP70":    "LRJ_hasRecoB_WP70",
+        "has_reco_b_WP77":    "LRJ_hasRecoB_WP77",
+        "has_reco_b_WP85":    "LRJ_hasRecoB_WP85",
+        "has_reco_b_WP90":    "LRJ_hasRecoB_WP90",
+        # GN2v01 reco c-WP flags  (FixedCutCEff_XX, 77% b-veto applied)
+        "has_reco_c_WP10":    "LRJ_hasRecoC_WP10",
+        "has_reco_c_WP30":    "LRJ_hasRecoC_WP30",
+        "has_reco_c_WP50":    "LRJ_hasRecoC_WP50",
+        # GN3X large-R tagger raw scores
+        "GN3X_phtautauhad":   "GN3XPV01_phtautauhad",
+        "GN3X_phbb":          "GN3XPV01_phbb",
+        "GN3X_phcc":          "GN3XPV01_phcc",
+        "GN3X_ptop":          "GN3XPV01_ptop",
+        "GN3X_pqcdbb":        "GN3XPV01_pqcdbb",
+        "GN3X_pqcdbx":        "GN3XPV01_pqcdbx",
+        "GN3X_pqcdcx":        "GN3XPV01_pqcdcx",
+        "GN3X_pqcdll":        "GN3XPV01_pqcdll",
+        "GN3X_pWqq":          "GN3XPV01_pWqq",
+        # Particle Transformer scores
+        "WTrans_massdec":     "LRJ_WTransformer_massdec_ConstScore",
+        "WTrans_score":       "LRJ_WTransformer_ConstScore",
+        "TopTrans_score":     "LRJ_TopTransformer_ConstScore",
     }
     
     # 移除这里对 fjet_weight_pt 的计算，仅保留原始 MC 权重，权重重新计算将在 preprocess_lrj.py 中完成

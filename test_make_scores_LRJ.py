@@ -38,22 +38,47 @@ def calculate_gn3x_standalone(batch):
     return d_gn3x.cpu().numpy().flatten()
 
 def build_extra_x(batch, tag):
-    """为 LundNet 模型推理准备输入特征"""
+    """Build extra input features for LundNet inference.
+
+    Mapping:
+        only / fb65..fb90 / fc10..fc50  → Ntrk only  (filtered models use Ntrk only at inference)
+        toptrans / part (legacy alias)  → Ntrk + TopTrans_score
+        wtrans                          → Ntrk + WTrans_score
+        bWP65..bWP90                    → Ntrk + has_reco_b_WP{xx}
+        cWP10..cWP50                    → Ntrk + has_reco_c_WP{xx}
+        gn3x                            → Ntrk + 9 GN3X probs
+    """
     ntrk = batch.Ntrk.view(-1, 1).float()
-    
-    if tag == "only":
+
+    if tag in ("only",
+               "fb65", "fb70", "fb77", "fb85", "fb90",
+               "fc10", "fc30", "fc50"):
         return ntrk
-    elif tag == "b50":
-        return torch.cat([ntrk, batch.has_reco_b50.view(-1, 1).float()], dim=1)
-    elif tag == "b75":
-        return torch.cat([ntrk, batch.has_reco_b75.view(-1, 1).float()], dim=1)
-    elif tag == "part":
+    elif tag in ("toptrans", "part"):
         return torch.cat([ntrk, batch.TopTrans_score.view(-1, 1).float()], dim=1)
+    elif tag == "wtrans":
+        return torch.cat([ntrk, batch.WTrans_score.view(-1, 1).float()], dim=1)
+    elif tag == "bWP65":
+        return torch.cat([ntrk, batch.has_reco_b_WP65.view(-1, 1).float()], dim=1)
+    elif tag == "bWP70":
+        return torch.cat([ntrk, batch.has_reco_b_WP70.view(-1, 1).float()], dim=1)
+    elif tag == "bWP77":
+        return torch.cat([ntrk, batch.has_reco_b_WP77.view(-1, 1).float()], dim=1)
+    elif tag == "bWP85":
+        return torch.cat([ntrk, batch.has_reco_b_WP85.view(-1, 1).float()], dim=1)
+    elif tag == "bWP90":
+        return torch.cat([ntrk, batch.has_reco_b_WP90.view(-1, 1).float()], dim=1)
+    elif tag == "cWP10":
+        return torch.cat([ntrk, batch.has_reco_c_WP10.view(-1, 1).float()], dim=1)
+    elif tag == "cWP30":
+        return torch.cat([ntrk, batch.has_reco_c_WP30.view(-1, 1).float()], dim=1)
+    elif tag == "cWP50":
+        return torch.cat([ntrk, batch.has_reco_c_WP50.view(-1, 1).float()], dim=1)
     elif tag == "gn3x":
         gn3x_keys = [
-            "GN3X_ptop", "GN3X_pWqq", "GN3X_phbb", "GN3X_phcc", 
-            "GN3X_phtautauhad", "GN3X_pqcdbb", "GN3X_pqcdbx", 
-            "GN3X_pqcdcx", "GN3X_pqcdll"
+            "GN3X_ptop", "GN3X_pWqq", "GN3X_phbb", "GN3X_phcc",
+            "GN3X_phtautauhad", "GN3X_pqcdbb", "GN3X_pqcdbx",
+            "GN3X_pqcdcx", "GN3X_pqcdll",
         ]
         gn3x_feats = [getattr(batch, k).view(-1, 1).float() for k in gn3x_keys]
         return torch.cat([ntrk] + gn3x_feats, dim=1)

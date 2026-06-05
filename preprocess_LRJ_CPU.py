@@ -183,6 +183,19 @@ def _save_pt_plots(pts, labels, weights_all, config, out_dir):
     sprint(f"\n[Check] pT validation plots saved to: {plot_dir}")
 
 
+def _normalize_and_save(g_path, weight_arr, mean_x, std_x, mean_ntrk, std_ntrk, out_dir, is_test=False):
+    """Load one shard, normalize in-place, save to out_dir."""
+    dataset = torch.load(g_path, weights_only=False)
+    for i, g in enumerate(dataset):
+        g.x    = ((g.x - mean_x) / std_x).float()
+        g.Ntrk = torch.tensor((float(g.Ntrk) - mean_ntrk) / std_ntrk).float()
+        g.weights = 1.0 if is_test else float(weight_arr[i])
+    out_path = os.path.join(out_dir, f"processed_{os.path.basename(g_path)}")
+    torch.save(dataset, out_path)
+    del dataset
+    gc.collect()
+
+
 def process_lrj_pt_only(config):
     stats = json.load(open(config["data"]["meanstd_json"]))
     mean_x = torch.from_numpy(np.array(stats["mean_x"], dtype=np.float32))
@@ -190,67 +203,97 @@ def process_lrj_pt_only(config):
     mean_ntrk, std_ntrk = float(stats["mean_ntrk"]), float(stats["std_ntrk"])
 
     base_out_dir = config["data"]["out_dir"]
-    n_bins = config["n_bins_pt"]
+    n_bins     = config["n_bins_pt"]
     iterations = config.get("flatten_iterations", 2)
     use_streaming = config.get("streaming_flatten", True)
 
-    train_graph_files = []
-    for p in config["data"]["train_graphs"]:
-        train_graph_files.extend(sorted(glob.glob(p)))
+    # ------------------------------------------------------------------
+    # Determine training file layout:
+    #   train_parts  → list of per-part globs → output to train_part{i}/
+    #   train_graphs → flat glob list         → output to train/ (legacy)
+    # ------------------------------------------------------------------
+    use_parts = "train_parts" in config["data"]
 
-    if train_graph_files:
-        sprint(f"--- Stage 1: Global pT weights ({len(train_graph_files)} train batches, streaming={use_streaming}) ---")
+    if use_parts:
+        part_globs = config["data"]["train_parts"]
+        part_file_lists = []
+        all_train_files = []
+        for part_glob in part_globs:
+            pfiles = sorted(glob.glob(part_glob))
+            part_file_lists.append(pfiles)
+            all_train_files.extend(pfiles)
+        sprint(f"train_parts mode: {len(part_globs)} parts, "
+               f"{len(all_train_files)} total shards")
+    else:
+        all_train_files = []
+        for p in config["data"].get("train_graphs", []):
+            all_train_files.extend(sorted(glob.glob(p)))
+        part_file_lists = None
+
+    if all_train_files:
+        # ---- Stage 1: global pT weights from ALL train shards ----
+        sprint(f"--- Stage 1: Global pT weights ({len(all_train_files)} shards, "
+               f"streaming={use_streaming}) ---")
         if use_streaming:
             weight_by_graph, bin_edges = compute_streaming_flat_weights(
-                train_graph_files, n_bins=n_bins, iterations=iterations
+                all_train_files, n_bins=n_bins, iterations=iterations
             )
             hist_raw, hist_flat, _ = _accumulate_pt_histograms(
-                train_graph_files, weight_by_graph, bin_edges, n_bins
+                all_train_files, weight_by_graph, bin_edges, n_bins
             )
         else:
             from tools.GNN_model_weight.utils_newdata import assign_flat_weights
-
             pts_list, labels_list = [], []
-            for g_path in train_graph_files:
+            for g_path in all_train_files:
                 r_path = _graph_to_root_path(g_path)
                 with uproot.open(r_path) as f:
                     tree = f["FlatSubstructureJetTree"]
                     pts_list.append(tree["fjet_pt"].array(library="np"))
                     labels_list.append(tree["labels"].array(library="np"))
-            pts_all = np.concatenate(pts_list)
+            pts_all    = np.concatenate(pts_list)
             labels_all = np.concatenate(labels_list)
             weights_all = np.zeros_like(pts_all, dtype=float)
             for lab in (0, 1):
                 mask = labels_all == lab
                 if np.any(mask):
                     weights_all[mask] = assign_flat_weights(pts_all[mask], n_bins=n_bins)
-            weight_by_graph = {}
-            ptr = 0
-            for g_path, pts in zip(train_graph_files, pts_list):
-                weight_by_graph[g_path] = weights_all[ptr : ptr + len(pts)]
+            weight_by_graph, ptr = {}, 0
+            for g_path, pts in zip(all_train_files, pts_list):
+                weight_by_graph[g_path] = weights_all[ptr: ptr + len(pts)]
                 ptr += len(pts)
 
-        sprint("\n--- Stage 2: Normalization & pT weights on TRAIN set ---")
-        train_out = os.path.join(base_out_dir, "train")
-        os.makedirs(train_out, exist_ok=True)
-
-        for g_path in train_graph_files:
-            dataset = torch.load(g_path, weights_only=False)
-            weights = weight_by_graph[g_path]
-            for i, g in enumerate(dataset):
-                g.x = ((g.x - mean_x) / std_x).float()
-                g.Ntrk = torch.tensor((float(g.Ntrk) - mean_ntrk) / std_ntrk).float()
-                g.weights = float(weights[i])
-            out_path = os.path.join(train_out, f"processed_{os.path.basename(g_path)}")
-            torch.save(dataset, out_path)
-            del dataset
-            gc.collect()
-            sprint(f" Saved Train: {os.path.basename(g_path)}", end="\r")
+        # ---- Stage 2: normalize + save ----
+        if use_parts:
+            # Each part → its own train_part{i}/ subdir
+            sprint(f"\n--- Stage 2: Normalizing {len(part_globs)} train parts → train_part{{i}}/ ---")
+            for i, pfiles in enumerate(part_file_lists):
+                part_out = os.path.join(base_out_dir, f"train_part{i}")
+                os.makedirs(part_out, exist_ok=True)
+                for g_path in pfiles:
+                    _normalize_and_save(
+                        g_path, weight_by_graph[g_path],
+                        mean_x, std_x, mean_ntrk, std_ntrk, part_out
+                    )
+                    sprint(f" [part{i}] Saved: {os.path.basename(g_path)}", end="\r")
+                sprint(f"\n  Part {i}: {len(pfiles)} shards → {part_out}")
+            first_out = os.path.join(base_out_dir, "train_part0")
+        else:
+            # Legacy: flat train/ dir
+            sprint("\n--- Stage 2: Normalization & pT weights on TRAIN set ---")
+            train_out = os.path.join(base_out_dir, "train")
+            os.makedirs(train_out, exist_ok=True)
+            for g_path in all_train_files:
+                _normalize_and_save(
+                    g_path, weight_by_graph[g_path],
+                    mean_x, std_x, mean_ntrk, std_ntrk, train_out
+                )
+                sprint(f" Saved Train: {os.path.basename(g_path)}", end="\r")
+            first_out = train_out
 
         if use_streaming:
-            _save_pt_plots_streaming(hist_raw, hist_flat, bin_edges, config, train_out)
+            _save_pt_plots_streaming(hist_raw, hist_flat, bin_edges, config, first_out)
         else:
-            _save_pt_plots(pts_all, labels_all, weights_all, config, train_out)
+            _save_pt_plots(pts_all, labels_all, weights_all, config, first_out)
 
     if "test_graphs" in config["data"]:
         test_graph_files = []
@@ -263,17 +306,10 @@ def process_lrj_pt_only(config):
             os.makedirs(test_out, exist_ok=True)
 
             for g_path in test_graph_files:
-                dataset = torch.load(g_path, weights_only=False)
-                for g in dataset:
-                    g.x = ((g.x - mean_x) / std_x).float()
-                    g.Ntrk = torch.tensor((float(g.Ntrk) - mean_ntrk) / std_ntrk).float()
-                    g.weights = 1.0
-                torch.save(
-                    dataset,
-                    os.path.join(test_out, f"processed_{os.path.basename(g_path)}"),
+                _normalize_and_save(
+                    g_path, None,
+                    mean_x, std_x, mean_ntrk, std_ntrk, test_out, is_test=True
                 )
-                del dataset
-                gc.collect()
                 sprint(f" Saved Test: {os.path.basename(g_path)}", end="\r")
 
     sprint("\nPreprocessing complete.")

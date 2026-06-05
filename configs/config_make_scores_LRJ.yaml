@@ -13,24 +13,34 @@ test:
   batch_size: 1024
   scores_branch_name: "LRJ_{tag}_score"
   
-  # 需要通过 LundNet 模型推理的组合
+  # LundNet 模型推理列表 — tag 须与 build_extra_x / get_extra_features 中的 tag 一致
   models_to_run:
     - tag: "only"
       extra_dim: 1
       ckpt: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_only/best_model_lund_only.pt"
 
-    - tag: "b50"
-      extra_dim: 2
-      ckpt: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_b50/best_model_lund_b50.pt"
-
-    - tag: "b75"
-      extra_dim: 2
-      ckpt: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_b75/best_model_lund_b75.pt"
+    - tag: "gn3x"
+      extra_dim: 10
+      ckpt: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_gn3x/best_model_lund_gn3x.pt"
 
     - tag: "part"
       extra_dim: 2
       ckpt: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_part/best_model_lund_part.pt"
 
-    - tag: "gn3x"
-      extra_dim: 10
-      ckpt: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_gn3x/best_model_lund_gn3x.pt"
+    # GN2v01 official b-WPs (top tagger)
+    - tag: "bWP77"
+      extra_dim: 2
+      ckpt: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_bWP77/best_model_lund_bWP77.pt"
+
+    - tag: "bWP85"
+      extra_dim: 2
+      ckpt: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_bWP85/best_model_lund_bWP85.pt"
+
+    # GN2v01 official c-WPs (W tagger, 77% b-veto embedded)
+    - tag: "cWP30"
+      extra_dim: 2
+      ckpt: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_cWP30/best_model_lund_cWP30.pt"
+
+    - tag: "cWP50"
+      extra_dim: 2
+      ckpt: "/share/lustre/yzhu/IOP_DATA/models_lrj/exp_lund_cWP50/best_model_lund_cWP50.pt"

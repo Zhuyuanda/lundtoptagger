@@ -13,9 +13,13 @@ mkdir -p "$CONFIG_DIR" "$LOG_DIR"
 experiments=(
     "lund_only:1"
     "lund_gn3x:10"
-    "lund_b75:2"
-    "lund_b50:2"
     "lund_part:2"
+    # GN2v01 official b-WPs (FixedCutBEff_XX, top-3 SRJs by pT in cone)
+    "lund_bWP77:2"
+    "lund_bWP85:2"
+    # GN2v01 official c-WPs (FixedCutCEff_XX, top-2 SRJs, 77% b-veto embedded)
+    "lund_cWP30:2"
+    "lund_cWP50:2"
 )
 
 for exp in "${experiments[@]}"; do
