@@ -1,0 +1,12 @@
+# LRJ Grid input: only Rucio container names (trailing / optional).
+# Edit lists below; PFN resolution is automatic (grid/rucio_resolve.py, prefer eosatlas).
+
+qcd:
+  - user.yuanda.mc20_13TeV.364703.e7142_s3681_r13145_p7053.20e_jetm2_ANALYSIS.root
+  - user.yuanda.mc20_13TeV.364704.e7142_s3681_r13145_p7053.20e_jetm2_ANALYSIS.root
+  - user.yuanda.mc20_13TeV.364705.e7142_s3681_r13145_p7053.20e_jetm2_ANALYSIS.root
+  - user.yuanda.mc20_13TeV.364706.e7142_s3681_r13145_p7053.20e_jetm2_ANALYSIS.root
+  - user.yuanda.mc20_13TeV.364707.e7142_s3681_r13145_p7053.20e_jetm2_ANALYSIS.root
+
+top_signal: user.yuanda.mc20_13TeV.801661.e8435_s3681_r13145_p7053.20e_jetm2_ANALYSIS.root/
+w_signal: user.yuanda.mc20_13TeV.801859.e8482_s3681_r13145_p7053.20e_jetm2_ANALYSIS.root

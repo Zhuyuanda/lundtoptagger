@@ -1,0 +1,19 @@
+# After rsync from EOS — edit path_to_trainfiles, then train on UCL.
+
+data:
+  path_to_trainfiles: "/path/to/local/TopTagging_LRJ/preprocessed/train/processed_*.pt"
+  path_to_save: "models_lrj/exp_lund_gn3x"
+
+architecture:
+  choose_model: "LundNet_General"
+  training_mode: "lund_gn3x"
+  extra_dim: 10
+  batch_size: 1024
+  learning_rate: 0.0004
+  n_epochs: 35
+  patience: 8
+  test_size: 0.1
+  optimizer_schedule: [8, 16]
+
+gpu: 0
+num_workers: 0

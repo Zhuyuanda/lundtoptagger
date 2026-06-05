@@ -1,0 +1,22 @@
+# PanDA LRJ Step 1 — Rucio containers via %IN%; 70% train / 30% test
+
+path_to_rootfiles: []
+n_files: null
+
+event_fractions: {0.7: 1, 0.3: 1}
+event_fraction_idx: null
+
+out_dir: "/eos/user/yuanda/lundtoptagger_lrj/{id}/"
+out_file_name_graphs: "graphs_{id}{frac}_ln_kT_cut_{kT_cut}{include_pt}.pt"
+out_file_name_root: "data_{id}{frac}_ln_kT_cut_{kT_cut}.root"
+
+id: "TopTagging_LRJ"
+max_jets_per_batch: 5000
+entry_chunk_events: 30000
+
+signal_config_file: "configs/config_signal_LRJ.yaml"
+signal: top
+signal_name_in_weight: False
+
+kT_cut: null
+include_pt: True

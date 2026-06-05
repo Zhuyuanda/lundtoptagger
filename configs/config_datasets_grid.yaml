@@ -1,0 +1,9 @@
+# DEPRECATED: use configs/rucio_datasets_lrj.yaml (container names only).
+# PFNs are resolved automatically in submit/grid/run_make_data.sh via grid/rucio_resolve.py.
+#
+# Optional: pre-build cache manually:
+#   lsetup rucio
+#   python3 grid/rucio_resolve.py --signal top --write-cache /eos/user/yuanda/.../rucio_pfns_top.json
+
+path_to_rootfiles_top: []
+path_to_rootfiles_W: []

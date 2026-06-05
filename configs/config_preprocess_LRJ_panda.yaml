@@ -1,0 +1,12 @@
+data:
+  train_graphs:
+    - "/eos/user/yuanda/lundtoptagger_lrj/TopTagging_LRJ/part0_70percent/graphs_TopTagging_LRJ_batch*_ln_kT_cut_None_with_pt.pt"
+  test_graphs:
+    - "/eos/user/yuanda/lundtoptagger_lrj/TopTagging_LRJ/part1_30percent/graphs_TopTagging_LRJ_batch*_ln_kT_cut_None_with_pt.pt"
+  out_dir: "/eos/user/yuanda/lundtoptagger_lrj/TopTagging_LRJ/preprocessed"
+  meanstd_json: "/eos/user/yuanda/lundtoptagger_lrj/TopTagging_LRJ/part0_70percent/meanstd_part0.json"
+
+flatten_pt: True
+n_bins_pt: 100
+streaming_flatten: True
+flatten_iterations: 2
