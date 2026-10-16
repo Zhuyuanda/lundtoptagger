@@ -731,6 +731,17 @@ def lrj_create_train_dataset_pure(
             passed_selection.append(False)
             continue
 
+        # 1b. 信号样本里非 signal-label 的 jet（如 W'->WZ 的 Z jet、未匹配 boson jet）
+        #     必须剔除，不能当背景；背景样本里非 QCD(label 10) 的 jet 同样剔除。
+        if signal_dsids:
+            if dsids[i] in signal_dsids:
+                if label[i] not in signal_jet_truth_labels:
+                    passed_selection.append(False)
+                    continue
+            elif label[i] != 10:
+                passed_selection.append(False)
+                continue
+
         # 2. 标签映射：truth label + DSID 匹配 signal config 则为 1.0，其余为背景 0.0
         if signal_dsids:
             is_signal = (label[i] in signal_jet_truth_labels) and (dsids[i] in signal_dsids)

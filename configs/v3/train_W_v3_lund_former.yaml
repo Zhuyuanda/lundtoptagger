@@ -1,0 +1,28 @@
+data:
+  preproc_dir:  "/share/lustre/yzhu/pubnote/preprocessed_LRJ_W_801859_20M"
+  val_dir:      "/share/lustre/yzhu/pubnote/val_LRJ_W_801859_20M"
+  path_to_save: "/share/lustre/yzhu/IOP_DATA/v3_pub/models_W/exp_lund_former/nparts1"
+architecture:
+  choose_model: "LundFormer"
+  d_model: 96
+  n_heads: 8
+  n_layers_former: 4
+  d_ff: 288
+  batch_size: 512
+  training_mode: "lund_only"
+  extra_dim: 1
+  learning_rate: 0.0001
+  n_epochs: 35
+  patience: 8
+  early_stop: false
+  grad_clip: 5.0
+  test_size: 0.05
+  optimizer_schedule: [8, 16]
+  decor_mass_range: [40, 300]
+  mass_bins: [40, 300, 5]
+  monitor_wp50: true
+n_parts: 1
+shards_per_window: 40
+gpu: 0
+num_workers: 4
+scale_factor_workers: 8
